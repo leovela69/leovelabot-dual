@@ -247,11 +247,12 @@ def verify_webhook():
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
-    if mode == "subscribe" and token == VERIFY_TOKEN:
+        if mode == "subscribe" and token and hmac.compare_digest(token, VERIFY_TOKEN):
         logger.info("Webhook verificado correctamente")
-        return challenge, 200
+                from flask import Response
+        return Response(challenge, mimetype="text/plain"), 200
     else:
-        logger.warning(f"Verificacion fallida: mode={mode}, token={token}")
+                logger.warning(f"Verificacion fallida: mode={mode}")
         return "Forbidden", 403
 
 
