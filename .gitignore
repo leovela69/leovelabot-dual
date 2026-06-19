@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local virtualenvs
+venv/
+.venv/
+env/
+
+# IDE config
+.vscode/
+.idea/
+
+# Local databases/memory data (persisted on Render volumes, shouldn't be in Git)
+agents/memory_data/
+*.json
+
+# Temporary video files
+temp_videos/
+/tmp/
+
+# OS files
+.DS_Store
+Thumbs.db
