@@ -242,7 +242,7 @@ def send_result(phone: str, result: dict) -> None:
 # ---------------------------------------------------------------------------
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
-    """Verificacion del webhook por Meta (challenge)."""
+    """Verificacion del webhook por Meta (challenge) - Versión unificada limpia para Render."""
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
