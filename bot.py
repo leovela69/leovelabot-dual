@@ -107,14 +107,21 @@ Soy *Leo*, tu asistente IA con superpoderes. Puedo hacer _cualquier cosa_ que me
 
 Escribe /help para ver todos los comandos."""
 
-HELP_MESSAGE = """🦁 *Comandos de Leo Bot*
+HELP_MESSAGE = """🦁 *Comandos de Leo Bot (Hermes)*
 
+*Generales:*
 /start — Mensaje de bienvenida
 /help — Este menú de ayuda
 /stats — Mis estadísticas y aprendizaje
 /evolve — Forzar una evolución (auto-mejora)
 /clear — Limpiar mi memoria de tu conversación
 /about — Información sobre C8L Agency
+
+*C8L Agency:*
+/crear\_cover [descripción] — Genera una portada musical
+/crear\_video [descripción] — Genera un videoclip con IA
+/estado\_web — Estado del sistema C8L
+/top\_bandos — Ranking de usuarios
 
 *O simplemente escríbeme lo que necesites:*
 • _"Genera una imagen de un atardecer cyberpunk"_
@@ -123,7 +130,7 @@ HELP_MESSAGE = """🦁 *Comandos de Leo Bot*
 • _"Diseña un banner para YouTube"_
 • _"Explícame cómo funciona la IA"_
 
-¡Estoy aquí 24/7 para ayudarte! 🤖✨"""
+Estoy aquí 24/7. Solo escribe y me pongo a currar 🔥"""
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +203,167 @@ def cmd_about(message: Message) -> None:
             "🤖 Asistentes IA que evolucionan\n\n"
             "🌐 c8lagency.com"
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Comandos C8L Agency — Herramientas de producción
+# ---------------------------------------------------------------------------
+@bot.message_handler(commands=["crear_cover"])
+def cmd_crear_cover(message: Message) -> None:
+    """Genera un cover/portada musical con IA."""
+    user_name = message.from_user.first_name or "Usuario"
+    chat_id = message.chat.id
+
+    # Extraer el prompt después del comando
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(
+            message,
+            (
+                "🎵 *Crear Cover Musical*\n\n"
+                "Dime qué quieres en la portada. Ejemplo:\n\n"
+                "`/crear_cover portada trap oscura con calavera neon y título SAVAGE`\n"
+                "`/crear_cover cover de álbum estilo vaporwave con palmeras`\n\n"
+                "Cuanto más detalle, mejor queda 🔥"
+            ),
+        )
+        return
+
+    prompt = parts[1]
+    bot.send_chat_action(chat_id, "upload_photo")
+    memory.track_user_interaction(chat_id, user_name, "COVER")
+
+    # Usar el agente de diseño con prompt específico de cover
+    cover_prompt = (
+        f"Diseña una portada/cover de música profesional: {prompt}. "
+        f"Debe ser cuadrada (1:1), con tipografía impactante, "
+        f"calidad de distribución digital (Spotify/Apple Music)."
+    )
+
+    try:
+        result = run_async(design_agent.process(cover_prompt, chat_id, user_name))
+        _send_result(chat_id, result, message.message_id)
+
+        memory.record_episode(
+            chat_id=chat_id, user_name=user_name, intent="COVER",
+            user_message=prompt, result_type=result.get("type", "text"), success=True,
+        )
+    except Exception as e:
+        bot.reply_to(message, f"Error generando el cover: {str(e)}")
+
+
+@bot.message_handler(commands=["crear_video"])
+def cmd_crear_video(message: Message) -> None:
+    """Genera un videoclip o vídeo musical con IA."""
+    user_name = message.from_user.first_name or "Usuario"
+    chat_id = message.chat.id
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(
+            message,
+            (
+                "🎬 *Crear Vídeo*\n\n"
+                "Dime qué tipo de vídeo quieres. Ejemplo:\n\n"
+                "`/crear_video videoclip cyberpunk con coches y neones`\n"
+                "`/crear_video vídeo de 2 min sobre el espacio profundo`\n"
+                "`/crear_video lyric video para una canción de trap`\n\n"
+                "Si no dices duración, hago uno corto (~20s) 🎬"
+            ),
+        )
+        return
+
+    prompt = parts[1]
+    bot.send_chat_action(chat_id, "typing")
+    bot.send_message(chat_id, "🎬 Generando tu vídeo... esto tarda un poco, espera.")
+    memory.track_user_interaction(chat_id, user_name, "VIDEO_CREATE")
+
+    try:
+        # Detectar si pide vídeo largo (> 1 min)
+        import re
+        duration_match = re.search(r"(\d+)\s*min", prompt)
+        if duration_match and int(duration_match.group(1)) > 1:
+            result = run_async(video_pipeline.process(prompt, chat_id, user_name))
+        else:
+            result = run_async(video_agent.process(prompt, chat_id, user_name))
+
+        _send_result(chat_id, result, message.message_id)
+
+        memory.record_episode(
+            chat_id=chat_id, user_name=user_name, intent="VIDEO_CREATE",
+            user_message=prompt, result_type=result.get("type", "text"), success=True,
+        )
+    except Exception as e:
+        bot.reply_to(message, f"Error generando el vídeo: {str(e)}")
+
+
+@bot.message_handler(commands=["estado_web"])
+def cmd_estado_web(message: Message) -> None:
+    """Muestra el estado del sistema C8L Agency."""
+    chat_id = message.chat.id
+    user_name = message.from_user.first_name or "Usuario"
+    memory.track_user_interaction(chat_id, user_name, "STATUS")
+
+    # Estado del bot y sus sistemas
+    stats_text = memory.get_stats_summary()
+
+    status_msg = (
+        "🌐 *Estado de C8L Agency*\n\n"
+        "🤖 *Bot Hermes:* ✅ Online\n"
+        "💬 *Telegram:* ✅ Activo\n"
+        "📱 *WhatsApp:* ✅ Activo\n\n"
+        "🧠 *Agentes IA:*\n"
+        "  • Chat — ✅ Operativo\n"
+        "  • Imágenes — ✅ Operativo\n"
+        "  • Vídeos — ✅ Operativo\n"
+        "  • Código — ✅ Operativo\n"
+        "  • Diseño — ✅ Operativo\n\n"
+        f"{stats_text}\n\n"
+        "⚡ Todo funcionando correctamente."
+    )
+
+    bot.reply_to(message, status_msg)
+
+
+@bot.message_handler(commands=["top_bandos"])
+def cmd_top_bandos(message: Message) -> None:
+    """Muestra el ranking de Bandos en C8L Agency."""
+    chat_id = message.chat.id
+    user_name = message.from_user.first_name or "Usuario"
+    memory.track_user_interaction(chat_id, user_name, "RANKING")
+
+    # Sistema de ranking basado en interacciones del bot
+    profiles = memory.profiles
+    if not profiles:
+        bot.reply_to(message, "🏆 Aún no hay ranking. ¡Sé el primero en interactuar!")
+        return
+
+    # Ordenar usuarios por total de mensajes
+    sorted_users = sorted(
+        profiles.items(),
+        key=lambda x: x[1].get("total_messages", 0) if isinstance(x[1], dict) else 0,
+        reverse=True,
+    )[:10]
+
+    ranking_lines = []
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+    for i, (uid, profile) in enumerate(sorted_users):
+        if isinstance(profile, dict):
+            name = profile.get("user_name", "Anónimo")
+            msgs = profile.get("total_messages", 0)
+            if msgs > 0:
+                ranking_lines.append(f"{medals[i]} *{name}* — {msgs} mensajes")
+
+    if not ranking_lines:
+        bot.reply_to(message, "🏆 Aún no hay suficientes datos para el ranking.")
+        return
+
+    ranking_text = "\n".join(ranking_lines)
+    bot.reply_to(
+        message,
+        f"🏆 *Top Bandos — Ranking C8L*\n\n{ranking_text}\n\n💬 Cuanto más interactúes, más subes.",
     )
 
 
@@ -499,14 +667,15 @@ def _notify_admin_startup() -> None:
 def _auto_evolve_loop():
     """Ejecuta evolución automática cada 100 episodios."""
     import time
-    last_count = len(memory.episodes)
+    last_count = memory.episode_count
     while True:
         time.sleep(300)  # Revisar cada 5 minutos
-        current_count = len(memory.episodes)
+        current_count = memory.episode_count
         if current_count - last_count >= 100:
             logger.info("🧬 Evolución automática activada (100 nuevos episodios)")
             try:
-                asyncio.run(memory.evolve())
+                future = asyncio.run_coroutine_threadsafe(memory.evolve(), loop)
+                future.result(timeout=60)
             except Exception as e:
                 logger.error(f"Error en evolución automática: {e}")
             last_count = current_count

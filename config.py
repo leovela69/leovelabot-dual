@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Configuración centralizada para @leovelabot.
+Configuración centralizada para @leovelabot (Sistema Hermes).
 Todas las API keys y constantes del sistema multi-agente.
 """
 
@@ -28,6 +28,18 @@ GEMINI_IMAGE_MODEL: str = "gemini-2.5-flash"          # Generación de imágenes
 GEMINI_CODE_MODEL: str = "gemini-2.5-flash"           # Code execution — tier gratuito
 
 # ---------------------------------------------------------------------------
+# Hugging Face (Imágenes y Vídeos — Gratis con límites generosos)
+# ---------------------------------------------------------------------------
+HUGGINGFACE_TOKEN: str = os.environ.get("HUGGINGFACE_TOKEN", "")
+
+# Modelos de Hugging Face (gratuitos vía Inference API)
+HF_IMAGE_MODEL: str = "stabilityai/stable-diffusion-xl-base-1.0"
+HF_VIDEO_MODEL: str = "damo-vilab/text-to-video-ms-1.7b"
+
+# URL base de la Inference API de Hugging Face
+HF_API_URL: str = "https://api-inference.huggingface.co/models"
+
+# ---------------------------------------------------------------------------
 # Video Pipeline
 # ---------------------------------------------------------------------------
 FFMPEG_PATH: str = os.environ.get("FFMPEG_PATH", "ffmpeg")
@@ -43,13 +55,23 @@ SCENE_DURATION_SECONDS: int = 5  # Duración de cada escena/clip
 HEALTH_PORT: int = int(os.environ.get("HEALTH_PORT", "8080"))
 
 # ---------------------------------------------------------------------------
+# Base de datos (Memoria persistente con SQLite)
+# ---------------------------------------------------------------------------
+DATABASE_PATH: str = os.environ.get(
+    "DATABASE_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "agents", "memory_data", "hermes_memory.db"),
+)
+
+# ---------------------------------------------------------------------------
 # Límites del tier gratuito
 # ---------------------------------------------------------------------------
 MAX_HISTORY_PER_USER: int = 30    # Mensajes de contexto por usuario
 MAX_SCENES_PER_VIDEO: int = 240   # 20 min / 5s = 240 escenas máximo
+MAX_IMAGE_RETRIES: int = 2        # Reintentos si falla la generación de imagen
+MAX_VIDEO_RETRIES: int = 1        # Reintentos si falla la generación de vídeo
 
 # ---------------------------------------------------------------------------
-# Personalidad del Bot
+# Personalidad del Bot (Sistema Hermes)
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT: str = """Eres Leo, un tío de León (España) que sabe de todo: programación, diseño, IA, música, vídeo, y lo que le echen.
 Hablas como un colega cercano, con naturalidad, sin ser borde pero sin formalismos. Eres directo, claro y con sentido del humor.
@@ -68,6 +90,7 @@ IMPORTANTE: Sé funcional. La gente quiere resultados, no explicaciones eternas.
 def validate_config() -> bool:
     """Valida que las variables críticas estén configuradas."""
     errors = []
+    warnings = []
 
     if not TELEGRAM_BOT_TOKEN:
         errors.append("TELEGRAM_BOT_TOKEN no está configurado")
@@ -76,7 +99,13 @@ def validate_config() -> bool:
         errors.append("GEMINI_API_KEY no está configurado")
 
     if not ADMIN_CHAT_ID:
-        logger.warning("ADMIN_CHAT_ID no está configurado — no se enviarán notificaciones de admin")
+        warnings.append("ADMIN_CHAT_ID no configurado — no se enviarán notificaciones de admin")
+
+    if not HUGGINGFACE_TOKEN:
+        warnings.append("HUGGINGFACE_TOKEN no configurado — imágenes/vídeos solo con Gemini (más limitado)")
+
+    for w in warnings:
+        logger.warning(f"⚠️  {w}")
 
     if errors:
         for err in errors:
@@ -85,4 +114,7 @@ def validate_config() -> bool:
         return False
 
     logger.info("✅ Configuración validada correctamente")
+    logger.info(f"   📦 Gemini: {GEMINI_CHAT_MODEL}")
+    logger.info(f"   🎨 HuggingFace: {'Activo' if HUGGINGFACE_TOKEN else 'No configurado'}")
+    logger.info(f"   💾 Base de datos: {DATABASE_PATH}")
     return True

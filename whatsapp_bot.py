@@ -1,23 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-@LeoVelaBot — Bot Multi-Agente de WhatsApp para C8L Agency.
+@LeoVelaBot — Bot Multi-Agente de WhatsApp (Sistema Hermes).
 Usa la WhatsApp Cloud API (Meta) con los mismos agentes que Telegram.
 Servidor webhook Flask que recibe mensajes y responde via los agentes IA.
+
+Punto de entrada principal en Render: arranca Flask (WhatsApp) + Telegram polling.
 """
 
 import io
 import os
+import re
 import sys
 import json
 import logging
 import asyncio
-import hashlib
 import hmac
 import base64
-import tempfile
 import requests
 import threading
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 
 # Asegurar que el directorio actual está en el path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -64,7 +65,7 @@ if not validate_wa_config():
 app = Flask(__name__)
 
 # ---------------------------------------------------------------------------
-# Instancias globales (compartidas entre Telegram y WhatsApp en RAM)
+# Instancias globales (compartidas entre Telegram y WhatsApp)
 # ---------------------------------------------------------------------------
 memory = BotMemory()
 orchestrator = AgentOrchestrator()
@@ -86,18 +87,18 @@ orchestrator.register_agent("DESIGN", design_agent)
 # Conectar memoria al orquestador para contexto enriquecido
 orchestrator.set_memory(memory)
 
-# Event loop para async — en un hilo dedicado para evitar deadlocks con Flask
-import concurrent.futures
-
+# ---------------------------------------------------------------------------
+# Event loop para async — hilo dedicado para evitar deadlocks con Flask
+# ---------------------------------------------------------------------------
 _loop = asyncio.new_event_loop()
 _loop_thread = threading.Thread(target=_loop.run_forever, daemon=True)
 _loop_thread.start()
 
 
 def run_async(coro):
-    """Ejecuta una corutina async desde código sync de Flask sin bloquear el event loop."""
+    """Ejecuta una corutina async desde código sync de Flask sin bloquear."""
     future = asyncio.run_coroutine_threadsafe(coro, _loop)
-    return future.result(timeout=120)  # Timeout de 2 min para tareas pesadas (vídeo)
+    return future.result(timeout=180)  # 3 min timeout para vídeos largos
 
 
 # ---------------------------------------------------------------------------
@@ -112,8 +113,13 @@ HEADERS = {
 
 
 def send_text(to: str, text: str) -> dict:
-    """Envia un mensaje de texto por WhatsApp."""
-    chunks = [text[i:i+4096] for i in range(0, len(text), 4096)]
+    """Envia un mensaje de texto por WhatsApp (auto-split si > 4096 chars)."""
+    if not text:
+        text = "..."
+    # Limpiar markdown que WhatsApp no soporta bien
+    text = text.replace("**", "*").replace("__", "_")
+
+    chunks = [text[i:i + 4096] for i in range(0, len(text), 4096)]
     result = None
     for chunk in chunks:
         payload = {
@@ -124,7 +130,8 @@ def send_text(to: str, text: str) -> dict:
         }
         r = requests.post(API_URL, headers=HEADERS, json=payload, timeout=30)
         result = r.json()
-        logger.info(f"Texto enviado a {to}: {r.status_code}")
+        if r.status_code != 200:
+            logger.error(f"Error enviando texto: {result}")
     return result
 
 
@@ -148,7 +155,7 @@ def send_image(to: str, image_bytes: bytes, caption: str = "") -> dict:
         "messaging_product": "whatsapp",
         "to": to,
         "type": "image",
-        "image": {"id": media_id, "caption": caption[:1024]},
+        "image": {"id": media_id, "caption": caption[:1024] if caption else ""},
     }
     r = requests.post(API_URL, headers=HEADERS, json=payload, timeout=30)
     return r.json()
@@ -174,7 +181,7 @@ def send_document(to: str, doc_bytes: bytes, filename: str, caption: str = "") -
         "messaging_product": "whatsapp",
         "to": to,
         "type": "document",
-        "document": {"id": media_id, "caption": caption[:1024], "filename": filename},
+        "document": {"id": media_id, "caption": caption[:1024] if caption else "", "filename": filename},
     }
     r = requests.post(API_URL, headers=HEADERS, json=payload, timeout=30)
     return r.json()
@@ -203,7 +210,7 @@ def send_video(to: str, video_bytes: bytes, caption: str = "") -> dict:
         "messaging_product": "whatsapp",
         "to": to,
         "type": "video",
-        "video": {"id": media_id, "caption": caption[:1024]},
+        "video": {"id": media_id, "caption": caption[:1024] if caption else ""},
     }
     r = requests.post(API_URL, headers=HEADERS, json=payload, timeout=60)
     return r.json()
@@ -216,7 +223,10 @@ def mark_as_read(message_id: str) -> None:
         "status": "read",
         "message_id": message_id,
     }
-    requests.post(API_URL, headers=HEADERS, json=payload, timeout=10)
+    try:
+        requests.post(API_URL, headers=HEADERS, json=payload, timeout=10)
+    except Exception:
+        pass  # No crítico
 
 
 def _download_wa_media(media_id: str) -> bytes | None:
@@ -245,16 +255,13 @@ def _download_wa_media(media_id: str) -> bytes | None:
 
 
 async def _process_image_with_context(image_bytes: bytes, instruction: str, chat_id: int, user_name: str) -> dict:
-    """Procesa una imagen recibida con Gemini Vision — analiza, edita, o genera variaciones."""
+    """Procesa una imagen recibida con Gemini Vision."""
     from google import genai
     from google.genai import types
     from config import GEMINI_API_KEY, GEMINI_IMAGE_MODEL, SYSTEM_PROMPT
-    import base64
 
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
-
-        # Construir el prompt con la imagen
         image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
 
         prompt_text = (
@@ -275,7 +282,6 @@ async def _process_image_with_context(image_bytes: bytes, instruction: str, chat
             ),
         )
 
-        # Extraer resultado
         result_image = None
         result_text = ""
 
@@ -291,19 +297,19 @@ async def _process_image_with_context(image_bytes: bytes, instruction: str, chat
             return {
                 "type": "image",
                 "content": result_image,
-                "caption": result_text[:1024] if result_text else f"Aquí tienes lo que me pediste, {user_name}",
+                "caption": result_text[:1024] if result_text else f"Aquí tienes, {user_name}",
             }
         else:
             return {
                 "type": "text",
-                "content": result_text or "He visto tu imagen pero no he podido generar una respuesta visual. Dime qué quieres que haga con ella.",
+                "content": result_text or "He visto tu imagen pero no he podido generar nada visual. Dime qué quieres que haga con ella.",
             }
 
     except Exception as e:
-        logger.error(f"Error procesando imagen con Gemini: {e}", exc_info=True)
+        logger.error(f"Error procesando imagen: {e}", exc_info=True)
         return {
             "type": "text",
-            "content": f"Uf, no he podido procesar la imagen: {str(e)}. ¿Me dices qué querías que hiciera?",
+            "content": f"No he podido procesar la imagen: {str(e)}. ¿Me dices qué querías?",
         }
 
 
@@ -334,22 +340,148 @@ def send_result(phone: str, result: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Comandos de WhatsApp (empiezan con /)
+# ---------------------------------------------------------------------------
+def _handle_command(phone: str, text: str, user_name: str, chat_id: int) -> bool:
+    """Procesa comandos específicos. Devuelve True si era un comando."""
+    cmd = text.lower().strip()
+
+    if cmd in ["/start", "hola", "hi", "menu"]:
+        welcome = (
+            f"Qué pasa {user_name}! Soy Leo, el bot de C8L Agency.\n\n"
+            "Escríbeme lo que necesites y me pongo a currar:\n\n"
+            "🎨 Crear imágenes — \"Dibuja un león cyberpunk\"\n"
+            "🎬 Generar vídeos — \"Haz un vídeo corto del espacio\"\n"
+            "💻 Programar — \"Crea un juego Snake en HTML\"\n"
+            "🎯 Diseñar — \"Diseña un logo para mi marca\"\n"
+            "🎵 Cover musical — \"/cover portada trap oscura\"\n"
+            "💬 Conversar — Pregúntame lo que quieras\n\n"
+            "Solo escribe. Sin comandos raros ni historias. 🔥"
+        )
+        send_text(phone, welcome)
+        return True
+
+    if cmd == "/stats":
+        stats = memory.get_stats_summary()
+        ctx = memory.get_user_context(chat_id)
+        send_text(phone, f"{stats}\n{ctx}")
+        return True
+
+    if cmd == "/clear":
+        chat_agent.clear_history(chat_id)
+        send_text(phone, "Historial limpiado. Empezamos de cero, tío!")
+        return True
+
+    if cmd == "/help":
+        help_msg = (
+            "🦁 *Comandos disponibles:*\n\n"
+            "/stats — Mis estadísticas\n"
+            "/clear — Limpiar historial\n"
+            "/cover [descripción] — Crear portada musical\n"
+            "/video [descripción] — Crear vídeo\n"
+            "/estado — Estado del sistema\n"
+            "/ranking — Top usuarios\n\n"
+            "O simplemente escribe lo que necesites. Sin comandos."
+        )
+        send_text(phone, help_msg)
+        return True
+
+    if cmd == "/estado":
+        send_text(phone, (
+            "🌐 Estado de Hermes:\n\n"
+            "🤖 Bot: ✅ Online\n"
+            "📱 WhatsApp: ✅ Activo\n"
+            "💬 Telegram: ✅ Activo\n"
+            "🧠 Agentes: Todos operativos\n"
+            "💾 Memoria: SQLite persistente\n\n"
+            "⚡ Todo funcionando."
+        ))
+        return True
+
+    if cmd == "/ranking":
+        profiles = memory.profiles
+        if not profiles:
+            send_text(phone, "Aún no hay ranking. ¡Sé el primero!")
+            return True
+
+        sorted_users = sorted(
+            profiles.items(),
+            key=lambda x: x[1].get("total_messages", 0) if isinstance(x[1], dict) else 0,
+            reverse=True,
+        )[:10]
+
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+        lines = []
+        for i, (uid, profile) in enumerate(sorted_users):
+            if isinstance(profile, dict):
+                name = profile.get("user_name", "Anónimo")
+                msgs = profile.get("total_messages", 0)
+                if msgs > 0:
+                    lines.append(f"{medals[i]} {name} — {msgs} msgs")
+
+        if lines:
+            send_text(phone, f"🏆 *Top Usuarios C8L*\n\n" + "\n".join(lines))
+        else:
+            send_text(phone, "Aún no hay suficientes datos para el ranking.")
+        return True
+
+    # /cover [prompt]
+    if cmd.startswith("/cover"):
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            send_text(phone, "Dime qué quieres en la portada. Ejemplo:\n/cover portada trap oscura con calavera neon")
+            return True
+
+        prompt = parts[1]
+        cover_prompt = (
+            f"Diseña una portada/cover de música profesional: {prompt}. "
+            f"Cuadrada (1:1), tipografía impactante, calidad Spotify/Apple Music."
+        )
+        result = run_async(design_agent.process(cover_prompt, chat_id, user_name))
+        send_result(phone, result)
+        memory.record_episode(chat_id=chat_id, user_name=user_name, intent="COVER",
+                              user_message=prompt, result_type=result.get("type"), success=True)
+        return True
+
+    # /video [prompt]
+    if cmd.startswith("/video"):
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            send_text(phone, "Dime qué vídeo quieres. Ejemplo:\n/video clip cyberpunk con coches y neones")
+            return True
+
+        prompt = parts[1]
+        send_text(phone, "🎬 Generando tu vídeo... tarda un poco, espera.")
+        duration_match = re.search(r"(\d+)\s*min", prompt)
+        if duration_match and int(duration_match.group(1)) > 1:
+            result = run_async(video_pipeline.process(prompt, chat_id, user_name))
+        else:
+            result = run_async(video_agent.process(prompt, chat_id, user_name))
+        send_result(phone, result)
+        memory.record_episode(chat_id=chat_id, user_name=user_name, intent="VIDEO_CREATE",
+                              user_message=prompt, result_type=result.get("type"), success=True)
+        return True
+
+    return False  # No era un comando
+
+
+# ---------------------------------------------------------------------------
 # Webhook endpoints
 # ---------------------------------------------------------------------------
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
-    """Verificacion del webhook por Meta (challenge) - Versión unificada limpia para Render."""
+    """Verificación del webhook por Meta (challenge)."""
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
     if mode == "subscribe" and token and hmac.compare_digest(token, VERIFY_TOKEN):
-        logger.info("Webhook verificado correctamente")
-        from flask import Response
+        logger.info("✅ Webhook verificado correctamente")
         return Response(challenge, mimetype="text/plain"), 200
     else:
-        logger.warning(f"Verificacion fallida: mode={mode}")
+        logger.warning(f"❌ Verificación fallida: mode={mode}")
         return "Forbidden", 403
+
 
 @app.route("/webhook", methods=["POST"])
 def receive_message():
@@ -376,44 +508,27 @@ def receive_message():
         contacts = value.get("contacts", [{}])
         user_name = contacts[0].get("profile", {}).get("name", "Usuario") if contacts else "Usuario"
 
-        logger.info(f"Mensaje de {user_name} ({phone}): tipo={msg_type}")
+        logger.info(f"📩 Mensaje de {user_name} ({phone}): tipo={msg_type}")
         mark_as_read(msg_id)
+
+        # Calcular chat_id consistente desde el número de teléfono
+        chat_id = int(phone[-10:]) if len(phone) >= 10 else hash(phone) % 10**9
 
         if msg_type == "text":
             text = msg.get("text", {}).get("body", "")
-            logger.info(f"Texto: {text[:80]}...")
+            logger.info(f"   Texto: {text[:80]}...")
 
-            if text.lower() in ["/start", "hola", "hi", "menu"]:
-                welcome = (
-                    "Hola {name}! Soy Leo, tu asistente IA de C8L Agency.\n\n"
-                    "Puedo hacer cualquier cosa que me pidas:\n\n"
-                    "- Crear imagenes: \"Dibuja un leon cyberpunk\"\n"
-                    "- Generar videos: \"Haz un video corto del espacio\"\n"
-                    "- Programar: \"Crea un juego Snake en HTML\"\n"
-                    "- Disenar: \"Disena un logo para mi marca\"\n"
-                    "- Conversar: Preguntame lo que quieras\n\n"
-                    "Solo escribeme lo que necesites!"
-                ).format(name=user_name)
-                send_text(phone, welcome)
+            # Intentar procesar como comando
+            if _handle_command(phone, text, user_name, chat_id):
                 return jsonify({"status": "ok"}), 200
 
-            if text.lower() == "/stats":
-                stats = memory.get_stats_summary()
-                ctx = memory.get_user_context(int(phone[-10:]))
-                send_text(phone, f"{stats}\n{ctx}")
-                return jsonify({"status": "ok"}), 200
-
-            if text.lower() == "/clear":
-                chat_agent.clear_history(int(phone[-10:]))
-                send_text(phone, "Historial limpiado. Empezamos de cero!")
-                return jsonify({"status": "ok"}), 200
-
-            chat_id = int(phone[-10:])
+            # Procesar con el orquestador (mensaje normal)
             memory.track_user_interaction(chat_id, user_name, "MESSAGE")
 
             result = run_async(orchestrator.process(text, chat_id, user_name))
             send_result(phone, result)
 
+            # Registrar episodio (no bloquear la respuesta)
             try:
                 intent = run_async(orchestrator.classify_intent(text))
                 memory.record_episode(
@@ -427,21 +542,29 @@ def receive_message():
             except Exception:
                 pass
 
+            # Aprender de la tarea (background)
+            try:
+                intent = run_async(orchestrator.classify_intent(text))
+                run_async(memory.learn_from_task(
+                    user_message=text,
+                    intent=intent,
+                    result=str(result.get("content", ""))[:300],
+                    success=True,
+                ))
+            except Exception:
+                pass
+
         elif msg_type == "image":
-            # Descargar la imagen enviada por el usuario
+            # Descargar y procesar imagen
             image_id = msg.get("image", {}).get("id")
             caption = msg.get("image", {}).get("caption", "")
 
             if image_id:
-                chat_id = int(phone[-10:])
                 memory.track_user_interaction(chat_id, user_name, "IMAGE_RECEIVED")
-
-                # Descargar la imagen de WhatsApp
                 image_bytes = _download_wa_media(image_id)
 
                 if image_bytes:
-                    # Procesar con el agente de imágenes
-                    user_instruction = caption if caption else "Analiza esta imagen y dime qué ves. Si quiero que hagas algo con ella, te lo diré."
+                    user_instruction = caption if caption else "Analiza esta imagen y dime qué ves."
                     result = run_async(
                         _process_image_with_context(image_bytes, user_instruction, chat_id, user_name)
                     )
@@ -449,28 +572,58 @@ def receive_message():
                 else:
                     send_text(phone, "No pude descargar tu imagen. ¿Me la envías de nuevo?")
             else:
-                send_text(phone, "No pude recibir la imagen correctamente. Inténtalo otra vez.")
+                send_text(phone, "No pude recibir la imagen. Inténtalo otra vez.")
+
+        elif msg_type in ["audio", "voice"]:
+            send_text(phone, (
+                "He recibido tu audio, pero por ahora solo proceso texto e imágenes. "
+                "Escríbeme lo que necesites y me pongo con ello."
+            ))
+
+        elif msg_type == "document":
+            send_text(phone, (
+                "He recibido tu documento. Por ahora no puedo procesar archivos directamente, "
+                "pero puedo crear código, diseños, y mucho más. Dime qué necesitas."
+            ))
+
         else:
-            send_text(phone, "Por ahora solo proceso mensajes de texto e imagenes. Escribeme lo que necesites!")
+            send_text(phone, "Escríbeme en texto o envíame una imagen. Me pongo a currar con ello.")
 
     except Exception as e:
         logger.error(f"Error procesando webhook: {e}", exc_info=True)
+        # Intentar notificar al usuario del error
+        try:
+            if phone:
+                send_text(phone, "Uf, me ha dado un error. Dale otra vez en unos segundos.")
+        except Exception:
+            pass
 
     return jsonify({"status": "ok"}), 200
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    """Health check endpoint."""
+    """Health check endpoint para Render."""
     return jsonify({
         "status": "healthy",
-        "bot": "LeoVelaBot WhatsApp",
+        "bot": "LeoVelaBot Hermes",
+        "version": "2.0",
         "agents": ["chat", "image", "video", "video_pipeline", "code", "design"],
         "memory": {
-            "episodes": len(memory.episodes),
-            "skills": len(memory.skills),
-            "users": len(memory.profiles),
+            "episodes": memory.episode_count,
+            "skills": memory.skill_count,
+            "users": memory.profile_count,
         },
+    })
+
+
+@app.route("/", methods=["GET"])
+def root():
+    """Root endpoint — info básica."""
+    return jsonify({
+        "name": "LeoVelaBot Hermes",
+        "status": "running",
+        "endpoints": ["/webhook", "/health"],
     })
 
 
@@ -478,30 +631,32 @@ def health():
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    logger.info("Leo Vela WhatsApp Bot arrancando...")
-    logger.info(f"Agentes: chat, image, video, video_pipeline, code, design")
-    logger.info(f"Memoria: {len(memory.episodes)} episodios, {len(memory.skills)} habilidades")
-    logger.info(f"Webhook escuchando en puerto {WEBHOOK_PORT}")
+    logger.info("🦁 Leo Vela Bot (Hermes) arrancando...")
+    logger.info(f"   🧠 Agentes: chat, image, video, video_pipeline, code, design")
+    logger.info(f"   💾 Memoria: {memory.episode_count} episodios, {memory.skill_count} habilidades")
+    logger.info(f"   🌐 Webhook en puerto {WEBHOOK_PORT}")
 
     # Arrancar el bot de Telegram en segundo plano si el token está configurado
     telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     if telegram_token:
-        logger.info("Iniciando Bot de Telegram en segundo plano...")
+        logger.info("   📱 Iniciando Telegram en segundo plano...")
         try:
             import bot as tg_bot
-            # Compartir las mismas instancias de memoria y orquestador
+            # Compartir las mismas instancias
             tg_bot.memory = memory
             tg_bot.orchestrator = orchestrator
-            # Indicar que NO arranque su propio health server (ya lo sirve Flask)
             tg_bot._DUAL_MODE = True
-            # Lanzar el polling en un hilo
+            # Lanzar polling en un hilo daemon
             threading.Thread(
                 target=tg_bot.bot.infinity_polling,
                 kwargs={"timeout": 30, "long_polling_timeout": 25},
                 daemon=True,
             ).start()
-            logger.info("Bot de Telegram iniciado con éxito en segundo plano.")
+            logger.info("   ✅ Telegram activo en segundo plano")
         except Exception as tg_err:
-            logger.error(f"Error al iniciar el Bot de Telegram en segundo plano: {tg_err}", exc_info=True)
+            logger.error(f"   ❌ Error iniciando Telegram: {tg_err}", exc_info=True)
+    else:
+        logger.warning("   ⚠️ TELEGRAM_BOT_TOKEN no configurado — solo WhatsApp activo")
 
+    logger.info("🚀 Bot listo. Esperando mensajes...")
     app.run(host="0.0.0.0", port=WEBHOOK_PORT, debug=False)
