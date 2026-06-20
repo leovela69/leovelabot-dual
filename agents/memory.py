@@ -1,23 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-Sistema de Memoria y Aprendizaje — Evolución Autónoma.
-Permite al bot aprender de cada tarea, recordar preferencias,
-y mejorar sus respuestas con el tiempo (estilo Hermes Agent).
+Sistema de Memoria y Aprendizaje — Hermes Evolution Engine.
+Usa SQLite para persistencia real entre reinicios.
+
+Tres tipos de memoria:
+1. EPISÓDICA — Recuerda tareas pasadas y sus resultados
+2. SEMÁNTICA — Conocimientos y habilidades aprendidas
+3. PERFIL — Preferencias de cada usuario
+
+Evolución autónoma: analiza patrones, aprende de errores, mejora con el tiempo.
 """
 
 import os
 import json
 import time
+import sqlite3
 import logging
-from collections import defaultdict
+import threading
+from contextlib import contextmanager
 from google import genai
 from google.genai import types
 
-from config import GEMINI_API_KEY, GEMINI_CHAT_MODEL, TEMP_DIR
+from config import GEMINI_API_KEY, GEMINI_CHAT_MODEL, DATABASE_PATH
 
 logger = logging.getLogger("leovelabot.memory")
 
 _client = None
+
 
 def _get_client():
     global _client
@@ -25,63 +34,138 @@ def _get_client():
         _client = genai.Client(api_key=GEMINI_API_KEY)
     return _client
 
-MEMORY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory_data")
-
 
 class BotMemory:
     """
-    Sistema de memoria persistente y aprendizaje evolutivo.
-    
-    Tres tipos de memoria:
-    1. EPISÓDICA — Recuerda tareas pasadas y sus resultados
-    2. SEMÁNTICA — Conocimientos y habilidades aprendidas
-    3. PERFIL — Preferencias de cada usuario
+    Sistema de memoria persistente con SQLite y aprendizaje evolutivo.
+
+    Sobrevive a reinicios del servidor. Cada interacción se guarda.
+    El bot aprende de sus éxitos y errores.
     """
 
     def __init__(self):
-        os.makedirs(MEMORY_DIR, exist_ok=True)
-        self._episodes_path = os.path.join(MEMORY_DIR, "episodes.json")
-        self._skills_path = os.path.join(MEMORY_DIR, "learned_skills.json")
-        self._profiles_path = os.path.join(MEMORY_DIR, "user_profiles.json")
-        self._evolution_path = os.path.join(MEMORY_DIR, "evolution_log.json")
+        # Crear directorio si no existe
+        db_dir = os.path.dirname(DATABASE_PATH)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
 
-        self.episodes: list[dict] = self._load(self._episodes_path, [])
-        self.skills: list[dict] = self._load(self._skills_path, [])
-        self.profiles: dict[str, dict] = self._load(self._profiles_path, {})
-        self.evolution_log: list[dict] = self._load(self._evolution_path, [])
+        self._db_path = DATABASE_PATH
+        self._lock = threading.Lock()
+
+        # Inicializar la base de datos
+        self._init_db()
+
+        # Cargar conteos para acceso rápido
+        self._update_counts()
 
         logger.info(
-            f"🧠 Memoria cargada: {len(self.episodes)} episodios, "
-            f"{len(self.skills)} habilidades, {len(self.profiles)} perfiles"
+            f"🧠 Memoria SQLite cargada: {self.episode_count} episodios, "
+            f"{self.skill_count} habilidades, {self.profile_count} perfiles"
         )
 
     # ------------------------------------------------------------------
-    # Persistencia
+    # Propiedades para compatibilidad con el código existente
     # ------------------------------------------------------------------
-    def _load(self, path: str, default):
-        """Carga datos de un archivo JSON."""
-        try:
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            logger.warning(f"Error cargando {path}: {e}")
-        return default
+    @property
+    def episodes(self) -> list:
+        """Devuelve lista de episodios (para compatibilidad con health check)."""
+        return self._get_recent_episodes(100)
 
-    def _save(self, path: str, data) -> None:
-        """Guarda datos en un archivo JSON."""
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except IOError as e:
-            logger.error(f"Error guardando {path}: {e}")
+    @property
+    def skills(self) -> list:
+        """Devuelve lista de habilidades (para compatibilidad)."""
+        return self._get_all_skills()
 
+    @property
+    def profiles(self) -> dict:
+        """Devuelve diccionario de perfiles (para compatibilidad)."""
+        return self._get_all_profiles()
+
+    # ------------------------------------------------------------------
+    # Conexión SQLite (thread-safe)
+    # ------------------------------------------------------------------
+    @contextmanager
+    def _get_conn(self):
+        """Context manager para conexiones SQLite thread-safe."""
+        conn = sqlite3.connect(self._db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")  # Mejor rendimiento concurrente
+        conn.execute("PRAGMA busy_timeout=5000")
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _init_db(self):
+        """Crea las tablas si no existen."""
+        with self._get_conn() as conn:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS episodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    user_name TEXT DEFAULT 'Usuario',
+                    intent TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    result_type TEXT DEFAULT 'text',
+                    success INTEGER DEFAULT 1,
+                    notes TEXT DEFAULT '',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS skills (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL,
+                    type TEXT DEFAULT 'skill',
+                    intent TEXT NOT NULL,
+                    lesson TEXT NOT NULL,
+                    trigger_message TEXT DEFAULT '',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    chat_id INTEGER PRIMARY KEY,
+                    user_name TEXT DEFAULT 'Usuario',
+                    first_seen REAL NOT NULL,
+                    last_seen REAL NOT NULL,
+                    total_messages INTEGER DEFAULT 0,
+                    preferences TEXT DEFAULT '{}',
+                    favorite_intents TEXT DEFAULT '{}',
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS evolution_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL,
+                    stats TEXT NOT NULL,
+                    improvements TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_episodes_chat_id ON episodes(chat_id);
+                CREATE INDEX IF NOT EXISTS idx_episodes_intent ON episodes(intent);
+                CREATE INDEX IF NOT EXISTS idx_episodes_timestamp ON episodes(timestamp);
+                CREATE INDEX IF NOT EXISTS idx_skills_intent ON skills(intent);
+            """)
+
+    def _update_counts(self):
+        """Actualiza los conteos en memoria para acceso rápido."""
+        with self._get_conn() as conn:
+            self.episode_count = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+            self.skill_count = conn.execute("SELECT COUNT(*) FROM skills").fetchone()[0]
+            self.profile_count = conn.execute("SELECT COUNT(*) FROM user_profiles").fetchone()[0]
+
+    # ------------------------------------------------------------------
+    # PERSISTENCIA — No necesita save_all (SQLite auto-persiste)
+    # ------------------------------------------------------------------
     def save_all(self) -> None:
-        """Persiste toda la memoria a disco."""
-        self._save(self._episodes_path, self.episodes)
-        self._save(self._skills_path, self.skills)
-        self._save(self._profiles_path, self.profiles)
-        self._save(self._evolution_path, self.evolution_log)
+        """Compatibilidad — SQLite ya persiste automáticamente."""
+        self._update_counts()
+        logger.info("💾 Memoria sincronizada (SQLite)")
 
     # ------------------------------------------------------------------
     # 1. MEMORIA EPISÓDICA — Recordar tareas pasadas
@@ -97,54 +181,53 @@ class BotMemory:
         notes: str = "",
     ) -> None:
         """Registra un episodio (tarea completada) en la memoria."""
-        episode = {
-            "timestamp": time.time(),
-            "chat_id": chat_id,
-            "user_name": user_name,
-            "intent": intent,
-            "message": user_message[:500],
-            "result_type": result_type,
-            "success": success,
-            "notes": notes,
-        }
-        self.episodes.append(episode)
-
-        # Mantener máximo 1000 episodios (FIFO)
-        if len(self.episodes) > 1000:
-            self.episodes = self.episodes[-1000:]
-
-        self._save(self._episodes_path, self.episodes)
+        with self._lock:
+            with self._get_conn() as conn:
+                conn.execute(
+                    """INSERT INTO episodes (timestamp, chat_id, user_name, intent, message, result_type, success, notes)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (time.time(), chat_id, user_name, intent, user_message[:500], result_type, int(success), notes),
+                )
+            self.episode_count += 1
 
     def get_similar_episodes(self, intent: str, limit: int = 5) -> list[dict]:
         """Recupera episodios similares pasados para aprender de ellos."""
-        matching = [ep for ep in self.episodes if ep.get("intent") == intent]
-        return matching[-limit:]
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM episodes WHERE intent = ? ORDER BY timestamp DESC LIMIT ?",
+                (intent, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def _get_recent_episodes(self, limit: int = 100) -> list[dict]:
+        """Obtiene los episodios más recientes."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM episodes ORDER BY timestamp DESC LIMIT ?", (limit,)
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # 2. MEMORIA SEMÁNTICA — Habilidades aprendidas
     # ------------------------------------------------------------------
     async def learn_from_task(self, user_message: str, intent: str, result: str, success: bool) -> None:
         """
-        Analiza una tarea completada y extrae una habilidad/lección aprendida.
+        Analiza una tarea completada y extrae una lección aprendida.
         Usa Gemini para reflexionar sobre la tarea.
         """
-        if not success:
-            # Aprender de los errores también
-            lesson_type = "error_pattern"
-        else:
-            lesson_type = "skill"
+        lesson_type = "error_pattern" if not success else "skill"
 
         try:
             response = _get_client().models.generate_content(
                 model=GEMINI_CHAT_MODEL,
                 contents=(
-                    f"Eres un sistema de aprendizaje autónomo. Analiza esta tarea completada y extrae "
-                    f"UNA lección concisa (máximo 2 frases) que puedas usar para mejorar en el futuro.\n\n"
-                    f"Tipo de tarea: {intent}\n"
-                    f"Petición del usuario: {user_message[:300]}\n"
+                    f"Eres un sistema de aprendizaje autónomo. Analiza esta tarea y extrae "
+                    f"UNA lección concisa (máximo 2 frases) para mejorar en el futuro.\n\n"
+                    f"Tipo: {intent}\n"
+                    f"Petición: {user_message[:300]}\n"
                     f"Éxito: {'Sí' if success else 'No'}\n"
                     f"Resultado: {result[:300]}\n\n"
-                    f"Lección aprendida:"
+                    f"Lección:"
                 ),
                 config=types.GenerateContentConfig(
                     temperature=0.3,
@@ -154,91 +237,111 @@ class BotMemory:
 
             lesson = response.text.strip()
 
-            skill_entry = {
-                "timestamp": time.time(),
-                "type": lesson_type,
-                "intent": intent,
-                "lesson": lesson,
-                "trigger_message": user_message[:200],
-            }
-            self.skills.append(skill_entry)
+            with self._lock:
+                with self._get_conn() as conn:
+                    conn.execute(
+                        """INSERT INTO skills (timestamp, type, intent, lesson, trigger_message)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (time.time(), lesson_type, intent, lesson, user_message[:200]),
+                    )
+                self.skill_count += 1
 
-            # Mantener máximo 200 habilidades
-            if len(self.skills) > 200:
-                self.skills = self.skills[-200:]
-
-            self._save(self._skills_path, self.skills)
-            logger.info(f"📚 Nueva habilidad aprendida [{intent}]: {lesson[:80]}...")
+            logger.info(f"📚 Nueva habilidad [{intent}]: {lesson[:80]}...")
 
         except Exception as e:
             logger.error(f"Error aprendiendo de tarea: {e}")
 
     def get_relevant_skills(self, intent: str) -> str:
         """Obtiene habilidades relevantes para un tipo de tarea."""
-        relevant = [s for s in self.skills if s.get("intent") == intent]
-        if not relevant:
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT lesson FROM skills WHERE intent = ? ORDER BY timestamp DESC LIMIT 5",
+                (intent,),
+            ).fetchall()
+
+        if not rows:
             return ""
 
-        # Tomar las últimas 5 lecciones relevantes
-        recent = relevant[-5:]
-        lessons = "\n".join([f"- {s['lesson']}" for s in recent])
-        return f"\n\nLecciones aprendidas de tareas anteriores similares:\n{lessons}\n"
+        lessons = "\n".join([f"- {row['lesson']}" for row in rows])
+        return f"\nLecciones aprendidas de tareas similares:\n{lessons}\n"
+
+    def _get_all_skills(self) -> list[dict]:
+        """Obtiene todas las habilidades."""
+        with self._get_conn() as conn:
+            rows = conn.execute("SELECT * FROM skills ORDER BY timestamp DESC LIMIT 200").fetchall()
+            return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # 3. PERFIL DE USUARIO — Preferencias aprendidas
     # ------------------------------------------------------------------
     def update_user_profile(self, chat_id: int, user_name: str, key: str, value: str) -> None:
         """Actualiza una preferencia del usuario."""
-        uid = str(chat_id)
-        if uid not in self.profiles:
-            self.profiles[uid] = {
-                "user_name": user_name,
-                "first_seen": time.time(),
-                "preferences": {},
-                "total_messages": 0,
-                "favorite_intents": {},
-            }
+        with self._lock:
+            with self._get_conn() as conn:
+                row = conn.execute(
+                    "SELECT preferences FROM user_profiles WHERE chat_id = ?", (chat_id,)
+                ).fetchone()
 
-        self.profiles[uid]["preferences"][key] = value
-        self.profiles[uid]["user_name"] = user_name
-        self._save(self._profiles_path, self.profiles)
+                if row:
+                    prefs = json.loads(row["preferences"])
+                    prefs[key] = value
+                    conn.execute(
+                        "UPDATE user_profiles SET preferences = ?, user_name = ?, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?",
+                        (json.dumps(prefs, ensure_ascii=False), user_name, chat_id),
+                    )
+                else:
+                    prefs = {key: value}
+                    conn.execute(
+                        """INSERT INTO user_profiles (chat_id, user_name, first_seen, last_seen, total_messages, preferences, favorite_intents)
+                           VALUES (?, ?, ?, ?, 0, ?, '{}')""",
+                        (chat_id, user_name, time.time(), time.time(), json.dumps(prefs, ensure_ascii=False)),
+                    )
 
     def track_user_interaction(self, chat_id: int, user_name: str, intent: str) -> None:
         """Registra una interacción para aprender patrones del usuario."""
-        uid = str(chat_id)
-        if uid not in self.profiles:
-            self.profiles[uid] = {
-                "user_name": user_name,
-                "first_seen": time.time(),
-                "preferences": {},
-                "total_messages": 0,
-                "favorite_intents": {},
-            }
+        with self._lock:
+            with self._get_conn() as conn:
+                row = conn.execute(
+                    "SELECT total_messages, favorite_intents FROM user_profiles WHERE chat_id = ?",
+                    (chat_id,),
+                ).fetchone()
 
-        profile = self.profiles[uid]
-        profile["total_messages"] = profile.get("total_messages", 0) + 1
-        profile["last_seen"] = time.time()
-        profile["user_name"] = user_name
-
-        intents = profile.get("favorite_intents", {})
-        intents[intent] = intents.get(intent, 0) + 1
-        profile["favorite_intents"] = intents
-
-        self._save(self._profiles_path, self.profiles)
+                if row:
+                    total = row["total_messages"] + 1
+                    intents = json.loads(row["favorite_intents"])
+                    intents[intent] = intents.get(intent, 0) + 1
+                    conn.execute(
+                        """UPDATE user_profiles 
+                           SET total_messages = ?, last_seen = ?, user_name = ?, 
+                               favorite_intents = ?, updated_at = CURRENT_TIMESTAMP
+                           WHERE chat_id = ?""",
+                        (total, time.time(), user_name, json.dumps(intents), chat_id),
+                    )
+                else:
+                    intents = {intent: 1}
+                    conn.execute(
+                        """INSERT INTO user_profiles (chat_id, user_name, first_seen, last_seen, total_messages, preferences, favorite_intents)
+                           VALUES (?, ?, ?, ?, 1, '{}', ?)""",
+                        (chat_id, user_name, time.time(), time.time(), json.dumps(intents)),
+                    )
+                    self.profile_count += 1
 
     def get_user_context(self, chat_id: int) -> str:
         """Genera contexto personalizado basado en el perfil del usuario."""
-        uid = str(chat_id)
-        profile = self.profiles.get(uid)
-        if not profile:
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM user_profiles WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+
+        if not row:
             return ""
 
-        total = profile.get("total_messages", 0)
-        name = profile.get("user_name", "Usuario")
-        prefs = profile.get("preferences", {})
-        fav_intents = profile.get("favorite_intents", {})
+        total = row["total_messages"]
+        name = row["user_name"]
+        prefs = json.loads(row["preferences"])
+        fav_intents = json.loads(row["favorite_intents"])
 
-        context_parts = [f"\nContexto del usuario {name}:"]
+        context_parts = [f"\n👤 Contexto de {name}:"]
         context_parts.append(f"- Mensajes totales: {total}")
 
         if fav_intents:
@@ -251,43 +354,61 @@ class BotMemory:
 
         return "\n".join(context_parts)
 
+    def _get_all_profiles(self) -> dict:
+        """Obtiene todos los perfiles como diccionario."""
+        with self._get_conn() as conn:
+            rows = conn.execute("SELECT * FROM user_profiles").fetchall()
+            return {str(row["chat_id"]): dict(row) for row in rows}
+
     # ------------------------------------------------------------------
     # 4. EVOLUCIÓN — Auto-mejora periódica
     # ------------------------------------------------------------------
     async def evolve(self) -> str:
         """
-        Reflexión evolutiva: analiza todos los datos acumulados
-        y genera insights de mejora. Llamar periódicamente.
+        Reflexión evolutiva: analiza datos acumulados y genera insights.
+        Llamar periódicamente o con /evolve.
         """
         try:
+            # Recopilar estadísticas
+            with self._get_conn() as conn:
+                total_eps = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+                success_count = conn.execute("SELECT COUNT(*) FROM episodes WHERE success = 1").fetchone()[0]
+                total_skills = conn.execute("SELECT COUNT(*) FROM skills").fetchone()[0]
+                total_users = conn.execute("SELECT COUNT(*) FROM user_profiles").fetchone()[0]
+                error_patterns = conn.execute("SELECT COUNT(*) FROM skills WHERE type = 'error_pattern'").fetchone()[0]
+
+                # Errores recientes
+                recent_errors = conn.execute(
+                    "SELECT intent, message FROM episodes WHERE success = 0 ORDER BY timestamp DESC LIMIT 10"
+                ).fetchall()
+
+                # Habilidades recientes
+                recent_skills = conn.execute(
+                    "SELECT lesson FROM skills ORDER BY timestamp DESC LIMIT 10"
+                ).fetchall()
+
             stats = {
-                "total_episodes": len(self.episodes),
-                "total_skills": len(self.skills),
-                "total_users": len(self.profiles),
-                "success_rate": (
-                    sum(1 for ep in self.episodes if ep.get("success"))
-                    / max(len(self.episodes), 1)
-                    * 100
-                ),
-                "error_patterns": len([s for s in self.skills if s.get("type") == "error_pattern"]),
+                "total_episodes": total_eps,
+                "total_skills": total_skills,
+                "total_users": total_users,
+                "success_rate": (success_count / max(total_eps, 1)) * 100,
+                "error_patterns": error_patterns,
             }
 
-            recent_errors = [
-                ep for ep in self.episodes[-50:]
-                if not ep.get("success")
-            ]
+            errors_text = "\n".join(
+                [f"- [{dict(e)['intent']}] {dict(e)['message'][:100]}" for e in recent_errors]
+            )
+            skills_text = "\n".join([f"- {dict(s)['lesson']}" for s in recent_skills])
 
             response = _get_client().models.generate_content(
                 model=GEMINI_CHAT_MODEL,
                 contents=(
-                    f"Eres un sistema de auto-mejora para un bot IA. Analiza estas estadísticas "
-                    f"y sugiere 3 mejoras concretas y accionables.\n\n"
+                    f"Eres un sistema de auto-mejora para un bot IA llamado Hermes. "
+                    f"Analiza estas estadísticas y sugiere 3 mejoras concretas y accionables.\n\n"
                     f"Estadísticas:\n{json.dumps(stats, indent=2)}\n\n"
-                    f"Errores recientes:\n"
-                    + "\n".join([f"- [{e.get('intent')}] {e.get('message', '')[:100]}" for e in recent_errors[:10]])
-                    + "\n\nHabilidades aprendidas:\n"
-                    + "\n".join([f"- {s['lesson']}" for s in self.skills[-10:]])
-                    + "\n\nSugiere 3 mejoras concretas:"
+                    f"Errores recientes:\n{errors_text}\n\n"
+                    f"Habilidades aprendidas:\n{skills_text}\n\n"
+                    f"Sugiere 3 mejoras concretas (en español, estilo directo):"
                 ),
                 config=types.GenerateContentConfig(
                     temperature=0.5,
@@ -295,32 +416,41 @@ class BotMemory:
                 ),
             )
 
-            evolution_entry = {
-                "timestamp": time.time(),
-                "stats": stats,
-                "improvements": response.text.strip(),
-            }
-            self.evolution_log.append(evolution_entry)
-            self._save(self._evolution_path, self.evolution_log)
+            improvements = response.text.strip()
 
-            logger.info(f"🧬 Evolución completada: {response.text[:100]}...")
-            return response.text.strip()
+            # Guardar la evolución
+            with self._lock:
+                with self._get_conn() as conn:
+                    conn.execute(
+                        "INSERT INTO evolution_log (timestamp, stats, improvements) VALUES (?, ?, ?)",
+                        (time.time(), json.dumps(stats), improvements),
+                    )
+
+            logger.info(f"🧬 Evolución completada: {improvements[:100]}...")
+            self._update_counts()
+            return improvements
 
         except Exception as e:
             logger.error(f"Error en evolución: {e}")
             return f"Error durante la evolución: {e}"
 
     def get_stats_summary(self) -> str:
-        """Resumen de estadísticas para mostrar al admin."""
-        total_eps = len(self.episodes)
-        success = sum(1 for ep in self.episodes if ep.get("success"))
+        """Resumen de estadísticas para mostrar al usuario."""
+        with self._get_conn() as conn:
+            total_eps = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+            success = conn.execute("SELECT COUNT(*) FROM episodes WHERE success = 1").fetchone()[0]
+            total_skills = conn.execute("SELECT COUNT(*) FROM skills").fetchone()[0]
+            total_users = conn.execute("SELECT COUNT(*) FROM user_profiles").fetchone()[0]
+            evolutions = conn.execute("SELECT COUNT(*) FROM evolution_log").fetchone()[0]
+
         rate = (success / max(total_eps, 1)) * 100
 
         return (
-            f"📊 *Estadísticas del Bot*\n\n"
+            f"📊 *Estadísticas de Hermes*\n\n"
             f"🧠 Episodios registrados: {total_eps}\n"
-            f"📚 Habilidades aprendidas: {len(self.skills)}\n"
-            f"👥 Usuarios conocidos: {len(self.profiles)}\n"
+            f"📚 Habilidades aprendidas: {total_skills}\n"
+            f"👥 Usuarios conocidos: {total_users}\n"
             f"✅ Tasa de éxito: {rate:.1f}%\n"
-            f"🧬 Evoluciones realizadas: {len(self.evolution_log)}"
+            f"🧬 Evoluciones realizadas: {evolutions}\n"
+            f"💾 Base de datos: SQLite (persistente)"
         )

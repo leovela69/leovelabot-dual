@@ -11,6 +11,8 @@ services:
         sync: false
       - key: ADMIN_CHAT_ID
         sync: false
+      - key: HUGGINGFACE_TOKEN
+        sync: false
       - key: WHATSAPP_TOKEN
         sync: false
       - key: WHATSAPP_PHONE_ID
@@ -21,6 +23,8 @@ services:
         value: "34611636294"
       - key: TEMP_DIR
         value: "/tmp/leovelabot_videos"
+      - key: DATABASE_PATH
+        value: "/app/agents/memory_data/hermes_memory.db"
     disk:
       name: bot-memory
       mountPath: /app/agents/memory_data

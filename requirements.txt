@@ -1,6 +1,19 @@
+# ===========================================================================
+# @leovelabot — Dependencias (Sistema Hermes)
+# ===========================================================================
+
+# --- Telegram Bot ---
 pyTelegramBotAPI>=4.18.0,<5.0
+
+# --- Google Gemini AI (Chat, Imágenes, Code Execution) ---
 google-genai>=1.0.0
+
+# --- Procesamiento de imágenes ---
 Pillow>=10.0.0
+
+# --- WhatsApp Webhook Server ---
 flask>=3.0.0
-requests>=2.31.0
 gunicorn>=21.2.0
+
+# --- HTTP Requests (HuggingFace API, WhatsApp Cloud API) ---
+requests>=2.31.0

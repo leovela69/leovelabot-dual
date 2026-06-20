@@ -74,13 +74,20 @@ orchestrator.register_agent("VIDEO_LONG", video_pipeline)
 orchestrator.register_agent("CODE", code_agent)
 orchestrator.register_agent("DESIGN", design_agent)
 
-# Event loop para async
+# Conectar memoria al orquestador para contexto enriquecido
+orchestrator.set_memory(memory)
+
+# Event loop para async — en un hilo dedicado para evitar deadlocks
 loop = asyncio.new_event_loop()
+_loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
+_loop_thread.start()
 
 
 def run_async(coro):
-    """Ejecuta una corutina async desde código sync."""
-    return loop.run_until_complete(coro)
+    """Ejecuta una corutina async desde código sync sin bloquear."""
+    import concurrent.futures
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=120)
 
 
 # ---------------------------------------------------------------------------
@@ -100,14 +107,21 @@ Soy *Leo*, tu asistente IA con superpoderes. Puedo hacer _cualquier cosa_ que me
 
 Escribe /help para ver todos los comandos."""
 
-HELP_MESSAGE = """🦁 *Comandos de Leo Bot*
+HELP_MESSAGE = """🦁 *Comandos de Leo Bot (Hermes)*
 
+*Generales:*
 /start — Mensaje de bienvenida
 /help — Este menú de ayuda
 /stats — Mis estadísticas y aprendizaje
 /evolve — Forzar una evolución (auto-mejora)
 /clear — Limpiar mi memoria de tu conversación
 /about — Información sobre C8L Agency
+
+*C8L Agency:*
+/crear\_cover [descripción] — Genera una portada musical
+/crear\_video [descripción] — Genera un videoclip con IA
+/estado\_web — Estado del sistema C8L
+/top\_bandos — Ranking de usuarios
 
 *O simplemente escríbeme lo que necesites:*
 • _"Genera una imagen de un atardecer cyberpunk"_
@@ -116,7 +130,7 @@ HELP_MESSAGE = """🦁 *Comandos de Leo Bot*
 • _"Diseña un banner para YouTube"_
 • _"Explícame cómo funciona la IA"_
 
-¡Estoy aquí 24/7 para ayudarte! 🤖✨"""
+Estoy aquí 24/7. Solo escribe y me pongo a currar 🔥"""
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +203,167 @@ def cmd_about(message: Message) -> None:
             "🤖 Asistentes IA que evolucionan\n\n"
             "🌐 c8lagency.com"
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Comandos C8L Agency — Herramientas de producción
+# ---------------------------------------------------------------------------
+@bot.message_handler(commands=["crear_cover"])
+def cmd_crear_cover(message: Message) -> None:
+    """Genera un cover/portada musical con IA."""
+    user_name = message.from_user.first_name or "Usuario"
+    chat_id = message.chat.id
+
+    # Extraer el prompt después del comando
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(
+            message,
+            (
+                "🎵 *Crear Cover Musical*\n\n"
+                "Dime qué quieres en la portada. Ejemplo:\n\n"
+                "`/crear_cover portada trap oscura con calavera neon y título SAVAGE`\n"
+                "`/crear_cover cover de álbum estilo vaporwave con palmeras`\n\n"
+                "Cuanto más detalle, mejor queda 🔥"
+            ),
+        )
+        return
+
+    prompt = parts[1]
+    bot.send_chat_action(chat_id, "upload_photo")
+    memory.track_user_interaction(chat_id, user_name, "COVER")
+
+    # Usar el agente de diseño con prompt específico de cover
+    cover_prompt = (
+        f"Diseña una portada/cover de música profesional: {prompt}. "
+        f"Debe ser cuadrada (1:1), con tipografía impactante, "
+        f"calidad de distribución digital (Spotify/Apple Music)."
+    )
+
+    try:
+        result = run_async(design_agent.process(cover_prompt, chat_id, user_name))
+        _send_result(chat_id, result, message.message_id)
+
+        memory.record_episode(
+            chat_id=chat_id, user_name=user_name, intent="COVER",
+            user_message=prompt, result_type=result.get("type", "text"), success=True,
+        )
+    except Exception as e:
+        bot.reply_to(message, f"Error generando el cover: {str(e)}")
+
+
+@bot.message_handler(commands=["crear_video"])
+def cmd_crear_video(message: Message) -> None:
+    """Genera un videoclip o vídeo musical con IA."""
+    user_name = message.from_user.first_name or "Usuario"
+    chat_id = message.chat.id
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(
+            message,
+            (
+                "🎬 *Crear Vídeo*\n\n"
+                "Dime qué tipo de vídeo quieres. Ejemplo:\n\n"
+                "`/crear_video videoclip cyberpunk con coches y neones`\n"
+                "`/crear_video vídeo de 2 min sobre el espacio profundo`\n"
+                "`/crear_video lyric video para una canción de trap`\n\n"
+                "Si no dices duración, hago uno corto (~20s) 🎬"
+            ),
+        )
+        return
+
+    prompt = parts[1]
+    bot.send_chat_action(chat_id, "typing")
+    bot.send_message(chat_id, "🎬 Generando tu vídeo... esto tarda un poco, espera.")
+    memory.track_user_interaction(chat_id, user_name, "VIDEO_CREATE")
+
+    try:
+        # Detectar si pide vídeo largo (> 1 min)
+        import re
+        duration_match = re.search(r"(\d+)\s*min", prompt)
+        if duration_match and int(duration_match.group(1)) > 1:
+            result = run_async(video_pipeline.process(prompt, chat_id, user_name))
+        else:
+            result = run_async(video_agent.process(prompt, chat_id, user_name))
+
+        _send_result(chat_id, result, message.message_id)
+
+        memory.record_episode(
+            chat_id=chat_id, user_name=user_name, intent="VIDEO_CREATE",
+            user_message=prompt, result_type=result.get("type", "text"), success=True,
+        )
+    except Exception as e:
+        bot.reply_to(message, f"Error generando el vídeo: {str(e)}")
+
+
+@bot.message_handler(commands=["estado_web"])
+def cmd_estado_web(message: Message) -> None:
+    """Muestra el estado del sistema C8L Agency."""
+    chat_id = message.chat.id
+    user_name = message.from_user.first_name or "Usuario"
+    memory.track_user_interaction(chat_id, user_name, "STATUS")
+
+    # Estado del bot y sus sistemas
+    stats_text = memory.get_stats_summary()
+
+    status_msg = (
+        "🌐 *Estado de C8L Agency*\n\n"
+        "🤖 *Bot Hermes:* ✅ Online\n"
+        "💬 *Telegram:* ✅ Activo\n"
+        "📱 *WhatsApp:* ✅ Activo\n\n"
+        "🧠 *Agentes IA:*\n"
+        "  • Chat — ✅ Operativo\n"
+        "  • Imágenes — ✅ Operativo\n"
+        "  • Vídeos — ✅ Operativo\n"
+        "  • Código — ✅ Operativo\n"
+        "  • Diseño — ✅ Operativo\n\n"
+        f"{stats_text}\n\n"
+        "⚡ Todo funcionando correctamente."
+    )
+
+    bot.reply_to(message, status_msg)
+
+
+@bot.message_handler(commands=["top_bandos"])
+def cmd_top_bandos(message: Message) -> None:
+    """Muestra el ranking de Bandos en C8L Agency."""
+    chat_id = message.chat.id
+    user_name = message.from_user.first_name or "Usuario"
+    memory.track_user_interaction(chat_id, user_name, "RANKING")
+
+    # Sistema de ranking basado en interacciones del bot
+    profiles = memory.profiles
+    if not profiles:
+        bot.reply_to(message, "🏆 Aún no hay ranking. ¡Sé el primero en interactuar!")
+        return
+
+    # Ordenar usuarios por total de mensajes
+    sorted_users = sorted(
+        profiles.items(),
+        key=lambda x: x[1].get("total_messages", 0) if isinstance(x[1], dict) else 0,
+        reverse=True,
+    )[:10]
+
+    ranking_lines = []
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+    for i, (uid, profile) in enumerate(sorted_users):
+        if isinstance(profile, dict):
+            name = profile.get("user_name", "Anónimo")
+            msgs = profile.get("total_messages", 0)
+            if msgs > 0:
+                ranking_lines.append(f"{medals[i]} *{name}* — {msgs} mensajes")
+
+    if not ranking_lines:
+        bot.reply_to(message, "🏆 Aún no hay suficientes datos para el ranking.")
+        return
+
+    ranking_text = "\n".join(ranking_lines)
+    bot.reply_to(
+        message,
+        f"🏆 *Top Bandos — Ranking C8L*\n\n{ranking_text}\n\n💬 Cuanto más interactúes, más subes.",
     )
 
 
@@ -277,21 +452,87 @@ def handle_message(message: Message) -> None:
 # ---------------------------------------------------------------------------
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message: Message) -> None:
-    """Procesa fotos enviadas por el usuario."""
+    """Procesa fotos enviadas por el usuario con Gemini Vision."""
     user_name = message.from_user.first_name or "Usuario"
-    caption = message.caption or "Analiza esta imagen"
+    chat_id = message.chat.id
+    caption = message.caption or "Analiza esta imagen y dime qué ves"
 
-    bot.send_chat_action(message.chat.id, "typing")
+    bot.send_chat_action(chat_id, "typing")
+    memory.track_user_interaction(chat_id, user_name, "IMAGE_RECEIVED")
 
-    bot.reply_to(
-        message,
-        (
-            "📸 ¡Recibí tu imagen! Por ahora puedo:\n\n"
-            "• Generar imágenes nuevas desde texto\n"
-            "• Crear diseños con estilo C8L\n\n"
-            "Descríbeme qué quieres hacer con la imagen o qué quieres crear."
-        ),
-    )
+    try:
+        # Descargar la foto (la de mayor resolución)
+        file_id = message.photo[-1].file_id
+        file_info = bot.get_file(file_id)
+        downloaded = bot.download_file(file_info.file_path)
+
+        # Procesar con Gemini Vision
+        result = run_async(_process_image_telegram(downloaded, caption, chat_id, user_name))
+        _send_result(chat_id, result, message.message_id)
+
+    except Exception as e:
+        logger.error(f"Error procesando foto: {e}", exc_info=True)
+        bot.reply_to(message, f"No he podido procesar tu imagen: {str(e)}")
+
+
+async def _process_image_telegram(image_bytes: bytes, instruction: str, chat_id: int, user_name: str) -> dict:
+    """Procesa una imagen recibida en Telegram con Gemini Vision."""
+    from google import genai
+    from google.genai import types
+    from config import GEMINI_API_KEY, GEMINI_IMAGE_MODEL, SYSTEM_PROMPT
+    import base64
+
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+
+        image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+
+        prompt_text = (
+            f"{SYSTEM_PROMPT}\n\n"
+            f"El usuario {user_name} te ha enviado una imagen con esta instrucción: '{instruction}'\n\n"
+            f"Si te pide modificarla, generar una versión nueva, o algo creativo con ella, hazlo.\n"
+            f"Si solo quiere saber qué es, descríbela con detalle.\n"
+            f"Responde de forma natural como Leo (tío de León, cercano)."
+        )
+
+        response = client.models.generate_content(
+            model=GEMINI_IMAGE_MODEL,
+            contents=[image_part, prompt_text],
+            config=types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"],
+                temperature=0.8,
+            ),
+        )
+
+        result_image = None
+        result_text = ""
+
+        if response.candidates and response.candidates[0].content:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "inline_data") and part.inline_data:
+                    data = part.inline_data.data
+                    result_image = base64.b64decode(data) if isinstance(data, str) else data
+                elif hasattr(part, "text") and part.text:
+                    result_text += part.text
+
+        if result_image:
+            return {
+                "type": "image",
+                "content": result_image,
+                "caption": result_text[:1024] if result_text else f"Aquí tienes, {user_name}",
+            }
+        else:
+            return {
+                "type": "text",
+                "content": result_text or "He visto tu imagen pero no he podido generar nada visual. Dime qué quieres que haga.",
+            }
+
+    except Exception as e:
+        logger.error(f"Error procesando imagen Telegram: {e}", exc_info=True)
+        return {
+            "type": "text",
+            "content": f"No he podido procesar la imagen: {str(e)}",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +593,10 @@ def _send_result(chat_id: int, result: dict, reply_to: int = None) -> None:
     except Exception as e:
         logger.error(f"Error enviando resultado: {e}")
         bot.send_message(chat_id, f"❌ Error enviando el resultado: {str(e)}")
+
+
+# Flag para modo dual (cuando se ejecuta desde whatsapp_bot.py)
+_DUAL_MODE = False
 
 
 # ---------------------------------------------------------------------------
@@ -422,14 +667,15 @@ def _notify_admin_startup() -> None:
 def _auto_evolve_loop():
     """Ejecuta evolución automática cada 100 episodios."""
     import time
-    last_count = len(memory.episodes)
+    last_count = memory.episode_count
     while True:
         time.sleep(300)  # Revisar cada 5 minutos
-        current_count = len(memory.episodes)
+        current_count = memory.episode_count
         if current_count - last_count >= 100:
             logger.info("🧬 Evolución automática activada (100 nuevos episodios)")
             try:
-                asyncio.run(memory.evolve())
+                future = asyncio.run_coroutine_threadsafe(memory.evolve(), loop)
+                future.result(timeout=60)
             except Exception as e:
                 logger.error(f"Error en evolución automática: {e}")
             last_count = current_count
@@ -452,8 +698,9 @@ def main():
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    # Health-check server (daemon)
-    threading.Thread(target=_run_health_server, daemon=True).start()
+    # Health-check server (daemon) — solo si no estamos en modo dual
+    if not _DUAL_MODE:
+        threading.Thread(target=_run_health_server, daemon=True).start()
 
     # Evolución automática (daemon)
     threading.Thread(target=_auto_evolve_loop, daemon=True).start()
