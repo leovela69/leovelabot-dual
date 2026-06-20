@@ -83,13 +83,21 @@ orchestrator.register_agent("VIDEO_LONG", video_pipeline)
 orchestrator.register_agent("CODE", code_agent)
 orchestrator.register_agent("DESIGN", design_agent)
 
-# Event loop para async
-loop = asyncio.new_event_loop()
+# Conectar memoria al orquestador para contexto enriquecido
+orchestrator.set_memory(memory)
+
+# Event loop para async — en un hilo dedicado para evitar deadlocks con Flask
+import concurrent.futures
+
+_loop = asyncio.new_event_loop()
+_loop_thread = threading.Thread(target=_loop.run_forever, daemon=True)
+_loop_thread.start()
 
 
 def run_async(coro):
-    """Ejecuta una corutina async desde codigo sync."""
-    return loop.run_until_complete(coro)
+    """Ejecuta una corutina async desde código sync de Flask sin bloquear el event loop."""
+    future = asyncio.run_coroutine_threadsafe(coro, _loop)
+    return future.result(timeout=120)  # Timeout de 2 min para tareas pesadas (vídeo)
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +217,94 @@ def mark_as_read(message_id: str) -> None:
         "message_id": message_id,
     }
     requests.post(API_URL, headers=HEADERS, json=payload, timeout=10)
+
+
+def _download_wa_media(media_id: str) -> bytes | None:
+    """Descarga un archivo multimedia de WhatsApp Cloud API."""
+    try:
+        # Paso 1: obtener la URL del media
+        media_url = f"https://graph.facebook.com/v21.0/{media_id}"
+        r = requests.get(media_url, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, timeout=15)
+        media_info = r.json()
+        download_url = media_info.get("url")
+
+        if not download_url:
+            logger.error(f"No se pudo obtener URL de media: {media_info}")
+            return None
+
+        # Paso 2: descargar el archivo
+        r = requests.get(download_url, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, timeout=30)
+        if r.status_code == 200:
+            return r.content
+        else:
+            logger.error(f"Error descargando media: {r.status_code}")
+            return None
+    except Exception as e:
+        logger.error(f"Error descargando media de WhatsApp: {e}")
+        return None
+
+
+async def _process_image_with_context(image_bytes: bytes, instruction: str, chat_id: int, user_name: str) -> dict:
+    """Procesa una imagen recibida con Gemini Vision — analiza, edita, o genera variaciones."""
+    from google import genai
+    from google.genai import types
+    from config import GEMINI_API_KEY, GEMINI_IMAGE_MODEL, SYSTEM_PROMPT
+    import base64
+
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+
+        # Construir el prompt con la imagen
+        image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+
+        prompt_text = (
+            f"{SYSTEM_PROMPT}\n\n"
+            f"El usuario {user_name} te ha enviado una imagen con esta instrucción: '{instruction}'\n\n"
+            f"Si te pide modificarla, generar una versión nueva, o algo creativo con ella, hazlo.\n"
+            f"Si solo quiere saber qué es, descríbela con detalle.\n"
+            f"Si te pide cambiar su cara, crear un avatar, o algo así, genera una imagen nueva basada en lo que ves.\n"
+            f"Responde de forma natural como Leo (tío de León, cercano)."
+        )
+
+        response = client.models.generate_content(
+            model=GEMINI_IMAGE_MODEL,
+            contents=[image_part, prompt_text],
+            config=types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"],
+                temperature=0.8,
+            ),
+        )
+
+        # Extraer resultado
+        result_image = None
+        result_text = ""
+
+        if response.candidates and response.candidates[0].content:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "inline_data") and part.inline_data:
+                    data = part.inline_data.data
+                    result_image = base64.b64decode(data) if isinstance(data, str) else data
+                elif hasattr(part, "text") and part.text:
+                    result_text += part.text
+
+        if result_image:
+            return {
+                "type": "image",
+                "content": result_image,
+                "caption": result_text[:1024] if result_text else f"Aquí tienes lo que me pediste, {user_name}",
+            }
+        else:
+            return {
+                "type": "text",
+                "content": result_text or "He visto tu imagen pero no he podido generar una respuesta visual. Dime qué quieres que haga con ella.",
+            }
+
+    except Exception as e:
+        logger.error(f"Error procesando imagen con Gemini: {e}", exc_info=True)
+        return {
+            "type": "text",
+            "content": f"Uf, no he podido procesar la imagen: {str(e)}. ¿Me dices qué querías que hiciera?",
+        }
 
 
 def send_result(phone: str, result: dict) -> None:
@@ -332,12 +428,28 @@ def receive_message():
                 pass
 
         elif msg_type == "image":
-            send_text(phone, (
-                "Recibi tu imagen! Por ahora puedo:\n\n"
-                "- Generar imagenes nuevas desde texto\n"
-                "- Crear disenos con estilo C8L\n\n"
-                "Describeme que quieres hacer con la imagen."
-            ))
+            # Descargar la imagen enviada por el usuario
+            image_id = msg.get("image", {}).get("id")
+            caption = msg.get("image", {}).get("caption", "")
+
+            if image_id:
+                chat_id = int(phone[-10:])
+                memory.track_user_interaction(chat_id, user_name, "IMAGE_RECEIVED")
+
+                # Descargar la imagen de WhatsApp
+                image_bytes = _download_wa_media(image_id)
+
+                if image_bytes:
+                    # Procesar con el agente de imágenes
+                    user_instruction = caption if caption else "Analiza esta imagen y dime qué ves. Si quiero que hagas algo con ella, te lo diré."
+                    result = run_async(
+                        _process_image_with_context(image_bytes, user_instruction, chat_id, user_name)
+                    )
+                    send_result(phone, result)
+                else:
+                    send_text(phone, "No pude descargar tu imagen. ¿Me la envías de nuevo?")
+            else:
+                send_text(phone, "No pude recibir la imagen correctamente. Inténtalo otra vez.")
         else:
             send_text(phone, "Por ahora solo proceso mensajes de texto e imagenes. Escribeme lo que necesites!")
 
@@ -380,11 +492,13 @@ if __name__ == "__main__":
             # Compartir las mismas instancias de memoria y orquestador
             tg_bot.memory = memory
             tg_bot.orchestrator = orchestrator
+            # Indicar que NO arranque su propio health server (ya lo sirve Flask)
+            tg_bot._DUAL_MODE = True
             # Lanzar el polling en un hilo
             threading.Thread(
                 target=tg_bot.bot.infinity_polling,
                 kwargs={"timeout": 30, "long_polling_timeout": 25},
-                daemon=True
+                daemon=True,
             ).start()
             logger.info("Bot de Telegram iniciado con éxito en segundo plano.")
         except Exception as tg_err:

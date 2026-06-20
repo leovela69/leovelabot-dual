@@ -23,8 +23,8 @@ VERIFY_TOKEN: str = os.environ.get("WA_VERIFY_TOKEN", "c8l_leovela_2026")
 # Numero del admin (tu numero con codigo de pais, sin + ni espacios)
 ADMIN_PHONE: str = os.environ.get("ADMIN_PHONE", "34611636294")
 
-# Puerto del servidor webhook
-WEBHOOK_PORT: int = int(os.environ.get("PORT", os.environ.get("WA_WEBHOOK_PORT", "5000")))
+# Puerto del servidor webhook (Render asigna PORT automáticamente)
+WEBHOOK_PORT: int = int(os.environ.get("PORT", "10000"))
 
 # ---------------------------------------------------------------------------
 # Gemini API (compartida con el bot de Telegram)

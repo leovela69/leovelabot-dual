@@ -74,13 +74,20 @@ orchestrator.register_agent("VIDEO_LONG", video_pipeline)
 orchestrator.register_agent("CODE", code_agent)
 orchestrator.register_agent("DESIGN", design_agent)
 
-# Event loop para async
+# Conectar memoria al orquestador para contexto enriquecido
+orchestrator.set_memory(memory)
+
+# Event loop para async — en un hilo dedicado para evitar deadlocks
 loop = asyncio.new_event_loop()
+_loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
+_loop_thread.start()
 
 
 def run_async(coro):
-    """Ejecuta una corutina async desde código sync."""
-    return loop.run_until_complete(coro)
+    """Ejecuta una corutina async desde código sync sin bloquear."""
+    import concurrent.futures
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=120)
 
 
 # ---------------------------------------------------------------------------
@@ -277,21 +284,87 @@ def handle_message(message: Message) -> None:
 # ---------------------------------------------------------------------------
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message: Message) -> None:
-    """Procesa fotos enviadas por el usuario."""
+    """Procesa fotos enviadas por el usuario con Gemini Vision."""
     user_name = message.from_user.first_name or "Usuario"
-    caption = message.caption or "Analiza esta imagen"
+    chat_id = message.chat.id
+    caption = message.caption or "Analiza esta imagen y dime qué ves"
 
-    bot.send_chat_action(message.chat.id, "typing")
+    bot.send_chat_action(chat_id, "typing")
+    memory.track_user_interaction(chat_id, user_name, "IMAGE_RECEIVED")
 
-    bot.reply_to(
-        message,
-        (
-            "📸 ¡Recibí tu imagen! Por ahora puedo:\n\n"
-            "• Generar imágenes nuevas desde texto\n"
-            "• Crear diseños con estilo C8L\n\n"
-            "Descríbeme qué quieres hacer con la imagen o qué quieres crear."
-        ),
-    )
+    try:
+        # Descargar la foto (la de mayor resolución)
+        file_id = message.photo[-1].file_id
+        file_info = bot.get_file(file_id)
+        downloaded = bot.download_file(file_info.file_path)
+
+        # Procesar con Gemini Vision
+        result = run_async(_process_image_telegram(downloaded, caption, chat_id, user_name))
+        _send_result(chat_id, result, message.message_id)
+
+    except Exception as e:
+        logger.error(f"Error procesando foto: {e}", exc_info=True)
+        bot.reply_to(message, f"No he podido procesar tu imagen: {str(e)}")
+
+
+async def _process_image_telegram(image_bytes: bytes, instruction: str, chat_id: int, user_name: str) -> dict:
+    """Procesa una imagen recibida en Telegram con Gemini Vision."""
+    from google import genai
+    from google.genai import types
+    from config import GEMINI_API_KEY, GEMINI_IMAGE_MODEL, SYSTEM_PROMPT
+    import base64
+
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+
+        image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+
+        prompt_text = (
+            f"{SYSTEM_PROMPT}\n\n"
+            f"El usuario {user_name} te ha enviado una imagen con esta instrucción: '{instruction}'\n\n"
+            f"Si te pide modificarla, generar una versión nueva, o algo creativo con ella, hazlo.\n"
+            f"Si solo quiere saber qué es, descríbela con detalle.\n"
+            f"Responde de forma natural como Leo (tío de León, cercano)."
+        )
+
+        response = client.models.generate_content(
+            model=GEMINI_IMAGE_MODEL,
+            contents=[image_part, prompt_text],
+            config=types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"],
+                temperature=0.8,
+            ),
+        )
+
+        result_image = None
+        result_text = ""
+
+        if response.candidates and response.candidates[0].content:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "inline_data") and part.inline_data:
+                    data = part.inline_data.data
+                    result_image = base64.b64decode(data) if isinstance(data, str) else data
+                elif hasattr(part, "text") and part.text:
+                    result_text += part.text
+
+        if result_image:
+            return {
+                "type": "image",
+                "content": result_image,
+                "caption": result_text[:1024] if result_text else f"Aquí tienes, {user_name}",
+            }
+        else:
+            return {
+                "type": "text",
+                "content": result_text or "He visto tu imagen pero no he podido generar nada visual. Dime qué quieres que haga.",
+            }
+
+    except Exception as e:
+        logger.error(f"Error procesando imagen Telegram: {e}", exc_info=True)
+        return {
+            "type": "text",
+            "content": f"No he podido procesar la imagen: {str(e)}",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +425,10 @@ def _send_result(chat_id: int, result: dict, reply_to: int = None) -> None:
     except Exception as e:
         logger.error(f"Error enviando resultado: {e}")
         bot.send_message(chat_id, f"❌ Error enviando el resultado: {str(e)}")
+
+
+# Flag para modo dual (cuando se ejecuta desde whatsapp_bot.py)
+_DUAL_MODE = False
 
 
 # ---------------------------------------------------------------------------
@@ -452,8 +529,9 @@ def main():
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    # Health-check server (daemon)
-    threading.Thread(target=_run_health_server, daemon=True).start()
+    # Health-check server (daemon) — solo si no estamos en modo dual
+    if not _DUAL_MODE:
+        threading.Thread(target=_run_health_server, daemon=True).start()
 
     # Evolución automática (daemon)
     threading.Thread(target=_auto_evolve_loop, daemon=True).start()

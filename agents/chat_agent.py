@@ -56,7 +56,7 @@ class ChatAgent:
             self._history[chat_id] = self._history[chat_id][-MAX_HISTORY_PER_USER:]
 
     async def process(self, message: str, chat_id: int, user_name: str) -> dict:
-        """Genera una respuesta conversacional."""
+        """Genera una respuesta conversacional con contexto y memoria."""
         try:
             # Construir el prompt con contexto
             history_text = self._get_history_text(chat_id)
@@ -64,12 +64,12 @@ class ChatAgent:
             full_prompt = f"""{SYSTEM_PROMPT}
 
 El usuario se llama {user_name}.
-
-{"Historial de la conversación:" if history_text else ""}
+{"" if not history_text else f"Historial reciente de la conversación (úsalo para mantener coherencia):"}
 {history_text}
 
-Usuario: {message}
+{user_name}: {message}
 
+Responde de forma directa y natural. Si te piden algo que no puedes hacer directamente en chat (como crear una imagen o un vídeo), dilo claro y explica cómo pedírtelo.
 Leo:"""
 
             response = _get_client().models.generate_content(
@@ -77,11 +77,15 @@ Leo:"""
                 contents=full_prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.8,
-                    max_output_tokens=1024,
+                    max_output_tokens=1500,
                 ),
             )
 
             reply = response.text.strip()
+            
+            # Limpiar prefijos innecesarios que Gemini a veces añade
+            if reply.startswith("Leo:"):
+                reply = reply[4:].strip()
 
             # Guardar en historial
             self._add_to_history(chat_id, "user", message)
@@ -90,10 +94,10 @@ Leo:"""
             return {"type": "text", "content": reply}
 
         except Exception as e:
-            logger.error(f"Error en Chat Agent: {e}")
+            logger.error(f"Error en Chat Agent: {e}", exc_info=True)
             return {
                 "type": "text",
-                "content": "🦁 Perdona, tuve un problema procesando tu mensaje. ¡Inténtalo otra vez!",
+                "content": "Uf tío, me ha dado un error. Dale otra vez a ver si va.",
             }
 
     def clear_history(self, chat_id: int) -> None:
