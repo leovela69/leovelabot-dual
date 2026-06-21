@@ -49,6 +49,10 @@ def cargar_todos_los_bots():
     import bots.sindicato
     import bots.contrato
 
+    # Multimedia
+    import bots.images
+    import bots.audio
+
     # Extras
     import bots.musica_corrector
     import bots.videoclip

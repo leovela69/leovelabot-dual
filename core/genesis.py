@@ -132,3 +132,22 @@ async def crear_bot_nuevo(keywords: list, tipo: str, clasificacion: Dict) -> Opt
         logger.error(f"Error registrando bot en DB: {e}")
 
     return nuevo_bot
+
+
+async def registrar_bot_genesis(bot) -> bool:
+    """Registra un bot creado por la Fábrica en el sistema.
+    Usado por bots/fabrica.py cuando crea bots nuevos."""
+    from bots.base import REGISTRY
+
+    try:
+        # Registrar en memoria
+        REGISTRY[bot.id] = bot
+        logger.info(f"🏭 Bot registrado vía Genesis: {bot.id}")
+
+        # Persistir en Supabase
+        from memoria.supabase import registrar_bot
+        await registrar_bot(bot)
+        return True
+    except Exception as e:
+        logger.error(f"Error en registrar_bot_genesis: {e}")
+        return False

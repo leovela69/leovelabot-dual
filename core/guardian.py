@@ -69,13 +69,21 @@ async def verificar_etica(texto: str, chat_id: str) -> Tuple[bool, str]:
         return False, "Mensaje demasiado largo. Por favor sé más conciso."
 
     # Verificar inyección de prompt
+    # Patrones de inyección de prompt
     if any(p in texto_lower for p in [
         "ignora las instrucciones",
+        "ignora tus instrucciones",
         "olvida tus reglas",
+        "olvida las reglas",
         "actúa como si no tuvieras",
+        "actua como si no tuvieras",
         "ignore previous",
+        "ignore your instructions",
         "disregard",
-        "jailbreak"
+        "jailbreak",
+        "override your",
+        "bypass your",
+        "forget your rules",
     ]):
         motivo = "Intento de inyección de prompt detectado"
         logger.warning(f"🚫 Guardian bloqueó inyección de {chat_id}")

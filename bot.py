@@ -17,9 +17,13 @@ from bots.custodio.vigia import ciclo_vigia
 from bots.custodio.analista import ciclo_analista
 from bots.custodio.creador import ciclo_creador
 from bots.custodio.aprendiz import ciclo_aprendiz
+from scripts.crear_bots_iniciales import cargar_todos_los_bots
 
 # Configurar logger
 logger.add("logs/c8l_agent.log", rotation="10 MB", level=config.LOG_LEVEL)
+
+# Cargar todos los bots al arrancar
+cargar_todos_los_bots()
 
 # Scheduler para ciclos automaticos del Custodio
 scheduler = AsyncIOScheduler(timezone=config.TIMEZONE)
@@ -36,8 +40,21 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(ciclo_creador, "interval", hours=config.AUDIT_INTERVAL_HOURS, id="creador")
     scheduler.add_job(ciclo_aprendiz, "cron", hour=3, id="aprendiz")  # 3am cada dia
 
+    # Reporte diario a Leo Vela
+    from bots.custodio.notificador import reporte_diario
+    scheduler.add_job(reporte_diario, "cron", hour=config.DAILY_REPORT_HOUR, id="reporte_diario")
+
+    # Bot Fantasma (entrenamiento 24/7, cada 30min en horario nocturno)
+    from bots.fantasma import bot_fantasma
+    async def ciclo_fantasma():
+        import datetime
+        hora = datetime.datetime.now().hour
+        if hora < 6 or hora > 22:  # Solo de 10pm a 6am
+            await bot_fantasma.ejecutar("entrenamiento", {})
+    scheduler.add_job(ciclo_fantasma, "interval", minutes=30, id="fantasma")
+
     scheduler.start()
-    logger.info("⏰ Scheduler iniciado con ciclos del Custodio")
+    logger.info("⏰ Scheduler iniciado con ciclos del Custodio + Fantasma + Reporte")
 
     yield
 
@@ -114,9 +131,17 @@ async def telegram_webhook(request: Request):
 @app.get("/")
 async def root():
     """Pagina principal"""
+    from bots.base import REGISTRY
     return {
         "nombre": "C8L AGENT v15.4 — CUSTODIO DEFINITIVO",
         "estado": "activo",
-        "bots_registrados": 44,
+        "bots_registrados": len(REGISTRY),
         "creador": "Leo Vela — C8L Agency"
     }
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Manejo global de errores para que el bot nunca crashee"""
+    logger.error(f"Error global no manejado: {exc}")
+    return JSONResponse({"ok": True, "error": "internal"})
