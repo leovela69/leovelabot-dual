@@ -54,9 +54,10 @@ logger = logging.getLogger("leovelabot.whatsapp")
 # ---------------------------------------------------------------------------
 # Validar configuracion
 # ---------------------------------------------------------------------------
-if not validate_wa_config():
-    logger.error("Configuracion de WhatsApp incompleta. Revisa las variables de entorno.")
-    sys.exit(1)
+WHATSAPP_ENABLED = validate_wa_config()
+if not WHATSAPP_ENABLED:
+    logger.warning("⚠️ WhatsApp NO configurado — el bot funcionará SOLO en modo Telegram.")
+    logger.warning("   Para activar WhatsApp, configura WHATSAPP_TOKEN y WHATSAPP_PHONE_ID.")
 
 # ---------------------------------------------------------------------------
 # Flask app
@@ -243,6 +244,9 @@ def send_result(phone: str, result: dict) -> None:
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
     """Verificacion del webhook por Meta (challenge) - Versión unificada limpia para Render."""
+    if not WHATSAPP_ENABLED:
+        return jsonify({"error": "WhatsApp not configured"}), 503
+
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
@@ -258,6 +262,9 @@ def verify_webhook():
 @app.route("/webhook", methods=["POST"])
 def receive_message():
     """Recibe mensajes de WhatsApp y los procesa con los agentes."""
+    if not WHATSAPP_ENABLED:
+        return jsonify({"error": "WhatsApp not configured"}), 503
+
     data = request.get_json()
 
     if not data:
@@ -366,15 +373,14 @@ def health():
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    logger.info("Leo Vela WhatsApp Bot arrancando...")
-    logger.info(f"Agentes: chat, image, video, video_pipeline, code, design")
-    logger.info(f"Memoria: {len(memory.episodes)} episodios, {len(memory.skills)} habilidades")
-    logger.info(f"Webhook escuchando en puerto {WEBHOOK_PORT}")
+    logger.info("🦁 Leo Vela Bot arrancando (modo unificado)...")
+    logger.info(f"   Agentes: chat, image, video, video_pipeline, code, design")
+    logger.info(f"   Memoria: {len(memory.episodes)} episodios, {len(memory.skills)} habilidades")
 
-    # Arrancar el bot de Telegram en segundo plano si el token está configurado
+    # Siempre arrancar el bot de Telegram en segundo plano
     telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     if telegram_token:
-        logger.info("Iniciando Bot de Telegram en segundo plano...")
+        logger.info("🤖 Iniciando Bot de Telegram en segundo plano...")
         try:
             import bot as tg_bot
             # Compartir las mismas instancias de memoria y orquestador
@@ -384,10 +390,17 @@ if __name__ == "__main__":
             threading.Thread(
                 target=tg_bot.bot.infinity_polling,
                 kwargs={"timeout": 30, "long_polling_timeout": 25},
-                daemon=True
+                daemon=True,
             ).start()
-            logger.info("Bot de Telegram iniciado con éxito en segundo plano.")
+            logger.info("✅ Bot de Telegram iniciado con éxito.")
         except Exception as tg_err:
-            logger.error(f"Error al iniciar el Bot de Telegram en segundo plano: {tg_err}", exc_info=True)
+            logger.error(f"❌ Error al iniciar Bot de Telegram: {tg_err}", exc_info=True)
+    else:
+        logger.warning("⚠️ TELEGRAM_BOT_TOKEN no configurado — Telegram desactivado.")
+
+    if WHATSAPP_ENABLED:
+        logger.info(f"📱 WhatsApp webhook escuchando en puerto {WEBHOOK_PORT}")
+    else:
+        logger.info(f"🌐 Servidor web (health-check only) en puerto {WEBHOOK_PORT}")
 
     app.run(host="0.0.0.0", port=WEBHOOK_PORT, debug=False)

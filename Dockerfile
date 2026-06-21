@@ -22,12 +22,16 @@ COPY . .
 RUN mkdir -p /tmp/leovelabot_videos
 RUN mkdir -p /app/agents/memory_data
 
-# Puerto del health-check
+# Puerto unificado (Render inyecta PORT, usamos 8080 como default)
 EXPOSE 8080
 
 # Variables de entorno por defecto
-ENV HEALTH_PORT=8080
+ENV PORT=8080
 ENV TEMP_DIR=/tmp/leovelabot_videos
 ENV PYTHONUNBUFFERED=1
 
+# Punto de entrada unificado:
+# - Siempre arranca Telegram (si TELEGRAM_BOT_TOKEN existe)
+# - Arranca WhatsApp webhook solo si WHATSAPP_TOKEN + WHATSAPP_PHONE_ID existen
+# - Siempre expone /health para Render health-checks
 CMD ["python", "whatsapp_bot.py"]
