@@ -3,12 +3,11 @@ uvicorn[standard]==0.24.0
 python-telegram-bot==20.7
 httpx==0.25.2
 google-generativeai==0.3.2
+google-genai==2.9.0
 groq==0.4.2
 openai==1.6.1
-supabase==2.3.0
+supabase==2.8.1
 redis==5.0.1
-chromadb==0.4.22
-jina==3.23.0
 apscheduler==3.10.4
 loguru==0.7.2
 python-dotenv==1.0.0
