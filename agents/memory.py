@@ -9,6 +9,7 @@ import os
 import json
 import time
 import logging
+import threading
 from collections import defaultdict
 from google import genai
 from google.genai import types
@@ -40,6 +41,7 @@ class BotMemory:
 
     def __init__(self):
         os.makedirs(MEMORY_DIR, exist_ok=True)
+        self._lock = threading.Lock()  # Protege escrituras concurrentes (Telegram + WhatsApp)
         self._episodes_path = os.path.join(MEMORY_DIR, "episodes.json")
         self._skills_path = os.path.join(MEMORY_DIR, "learned_skills.json")
         self._profiles_path = os.path.join(MEMORY_DIR, "user_profiles.json")
@@ -69,19 +71,28 @@ class BotMemory:
         return default
 
     def _save(self, path: str, data) -> None:
-        """Guarda datos en un archivo JSON."""
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except IOError as e:
-            logger.error(f"Error guardando {path}: {e}")
+        """Guarda datos en un archivo JSON (thread-safe)."""
+        with self._lock:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except IOError as e:
+                logger.error(f"Error guardando {path}: {e}")
 
     def save_all(self) -> None:
-        """Persiste toda la memoria a disco."""
-        self._save(self._episodes_path, self.episodes)
-        self._save(self._skills_path, self.skills)
-        self._save(self._profiles_path, self.profiles)
-        self._save(self._evolution_path, self.evolution_log)
+        """Persiste toda la memoria a disco (thread-safe)."""
+        with self._lock:
+            try:
+                with open(self._episodes_path, "w", encoding="utf-8") as f:
+                    json.dump(self.episodes, f, ensure_ascii=False, indent=2)
+                with open(self._skills_path, "w", encoding="utf-8") as f:
+                    json.dump(self.skills, f, ensure_ascii=False, indent=2)
+                with open(self._profiles_path, "w", encoding="utf-8") as f:
+                    json.dump(self.profiles, f, ensure_ascii=False, indent=2)
+                with open(self._evolution_path, "w", encoding="utf-8") as f:
+                    json.dump(self.evolution_log, f, ensure_ascii=False, indent=2)
+            except IOError as e:
+                logger.error(f"Error en save_all: {e}")
 
     # ------------------------------------------------------------------
     # 1. MEMORIA EPISÓDICA — Recordar tareas pasadas
