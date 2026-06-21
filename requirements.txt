@@ -1,7 +1,7 @@
 fastapi>=0.111.0
 uvicorn[standard]==0.24.0
-python-telegram-bot==20.7
-httpx==0.25.2
+python-telegram-bot>=21.0
+httpx>=0.28.1
 google-generativeai==0.3.2
 google-genai==2.9.0
 groq==0.4.2
