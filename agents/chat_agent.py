@@ -76,8 +76,8 @@ Leo:"""
                 model=GEMINI_CHAT_MODEL,
                 contents=full_prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.8,
-                    max_output_tokens=1024,
+                    temperature=0.85,
+                    max_output_tokens=2048,
                 ),
             )
 
