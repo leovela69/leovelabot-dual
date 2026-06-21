@@ -23,9 +23,9 @@ BOT_NAME: str = "leovelabot"
 GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
 
 # Modelos gratuitos (junio 2026)
-GEMINI_CHAT_MODEL: str = "gemini-2.5-flash"          # Chat, routing y code — tier gratuito
-GEMINI_IMAGE_MODEL: str = "gemini-2.5-flash-preview-image-generation"  # Generación de imágenes — 500/día gratis
-GEMINI_CODE_MODEL: str = "gemini-2.5-flash"           # Code execution — tier gratuito
+GEMINI_CHAT_MODEL: str = "gemini-3.5-flash"           # Chat, routing y code (gemini-2.5-flash MUERTO desde 17 jun 2026)
+GEMINI_IMAGE_MODEL: str = "gemini-3.1-flash-image"    # Generación de imágenes — Nano Banana 2
+GEMINI_CODE_MODEL: str = "gemini-3.5-flash"            # Code execution
 
 # ---------------------------------------------------------------------------
 # Video Pipeline
