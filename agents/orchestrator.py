@@ -81,24 +81,25 @@ class AgentOrchestrator:
         Procesa un mensaje: clasifica la intención y lo envía al agente correcto.
         
         Returns:
-            dict con keys: 'type' (text/image/video/file), 'content', y opcionalmente 'caption'
+            dict con keys: 'type', 'content', 'intent', y opcionalmente 'caption'
         """
         intent = await self.classify_intent(message)
 
         agent = self._agents.get(intent)
         if not agent:
-            # Si no hay agente para esa intención, usar chat como fallback
             agent = self._agents.get("CHAT")
 
         if not agent:
-            return {"type": "text", "content": "⚠️ No hay agentes configurados. Contacta al administrador."}
+            return {"type": "text", "content": "⚠️ No hay agentes configurados.", "intent": intent}
 
         try:
             result = await agent.process(message, chat_id, user_name)
+            result["intent"] = intent
             return result
         except Exception as e:
             logger.error(f"Error en agente {intent}: {e}", exc_info=True)
             return {
                 "type": "text",
-                "content": f"❌ Hubo un error procesando tu solicitud: {str(e)}\n\nInténtalo de nuevo o escribe /help.",
+                "content": f"❌ Error procesando tu solicitud: {str(e)}\n\nInténtalo de nuevo o escribe /help.",
+                "intent": intent,
             }

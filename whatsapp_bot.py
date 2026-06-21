@@ -84,13 +84,15 @@ orchestrator.register_agent("VIDEO_LONG", video_pipeline)
 orchestrator.register_agent("CODE", code_agent)
 orchestrator.register_agent("DESIGN", design_agent)
 
-# Event loop para async
-loop = asyncio.new_event_loop()
+# Event loop para async — thread-safe
+_loop = asyncio.new_event_loop()
+threading.Thread(target=_loop.run_forever, daemon=True, name="wa-async-loop").start()
 
 
 def run_async(coro):
-    """Ejecuta una corutina async desde codigo sync."""
-    return loop.run_until_complete(coro)
+    """Ejecuta una corutina async de forma thread-safe."""
+    future = asyncio.run_coroutine_threadsafe(coro, _loop)
+    return future.result(timeout=300)
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +328,7 @@ def receive_message():
             send_result(phone, result)
 
             try:
-                intent = run_async(orchestrator.classify_intent(text))
+                intent = result.get("intent", "CHAT")
                 memory.record_episode(
                     chat_id=chat_id,
                     user_name=user_name,

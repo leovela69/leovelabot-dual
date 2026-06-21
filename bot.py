@@ -55,13 +55,12 @@ if _is_main:
     if not validate_config():
         sys.exit(1)
 elif not TELEGRAM_BOT_TOKEN:
-    # Importado pero sin token — loguear aviso pero no crashear
     logger.warning("⚠️ bot.py importado sin TELEGRAM_BOT_TOKEN — funcionalidad Telegram limitada")
 
 # ---------------------------------------------------------------------------
 # Instancias globales
 # ---------------------------------------------------------------------------
-bot = TeleBot(TELEGRAM_BOT_TOKEN, parse_mode="Markdown") if TELEGRAM_BOT_TOKEN else None
+bot = TeleBot(TELEGRAM_BOT_TOKEN) if TELEGRAM_BOT_TOKEN else None
 memory = BotMemory()
 orchestrator = AgentOrchestrator()
 
@@ -80,13 +79,20 @@ orchestrator.register_agent("VIDEO_LONG", video_pipeline)
 orchestrator.register_agent("CODE", code_agent)
 orchestrator.register_agent("DESIGN", design_agent)
 
-# Event loop para async
-loop = asyncio.new_event_loop()
+# Event loop para async — thread-safe
+_loop = asyncio.new_event_loop()
+_loop_thread = threading.Thread(
+    target=_loop.run_forever,
+    daemon=True,
+    name="async-loop",
+)
+_loop_thread.start()
 
 
 def run_async(coro):
-    """Ejecuta una corutina async desde código sync."""
-    return loop.run_until_complete(coro)
+    """Ejecuta una corutina async de forma thread-safe."""
+    future = asyncio.run_coroutine_threadsafe(coro, _loop)
+    return future.result(timeout=300)
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +132,20 @@ HELP_MESSAGE = """🦁 *Comandos de Leo Bot*
 
 
 # ---------------------------------------------------------------------------
+# Helper: enviar texto con Markdown seguro (fallback a plain text)
+# ---------------------------------------------------------------------------
+def _safe_send(chat_id: int, text: str, parse_mode: str = "Markdown", **kwargs) -> None:
+    """Envía un mensaje intentando Markdown; si falla, envía como texto plano."""
+    try:
+        bot.send_message(chat_id, text, parse_mode=parse_mode, **kwargs)
+    except Exception:
+        try:
+            bot.send_message(chat_id, text, **kwargs)
+        except Exception as e2:
+            logger.error(f"Error enviando mensaje (plain): {e2}")
+
+
+# ---------------------------------------------------------------------------
 # Handlers de comandos
 # ---------------------------------------------------------------------------
 @bot.message_handler(commands=["start"])
@@ -134,10 +154,8 @@ def cmd_start(message: Message) -> None:
     name = message.from_user.first_name or "amigo"
     logger.info(f"🆕 /start de {name} (chat_id={message.chat.id})")
 
-    # Rastrear usuario en la memoria
     memory.track_user_interaction(message.chat.id, name, "START")
 
-    # Botones inline de acciones rápidas
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("🎨 Crear Imagen", callback_data="quick_image"),
@@ -146,44 +164,39 @@ def cmd_start(message: Message) -> None:
         InlineKeyboardButton("🎯 Diseñar", callback_data="quick_design"),
     )
 
-    bot.reply_to(message, WELCOME_MESSAGE.format(name=name), reply_markup=markup)
+    bot.reply_to(message, WELCOME_MESSAGE.format(name=name), reply_markup=markup, parse_mode="Markdown")
 
 
 @bot.message_handler(commands=["help"])
 def cmd_help(message: Message) -> None:
-    """Menú de ayuda."""
-    bot.reply_to(message, HELP_MESSAGE)
+    bot.reply_to(message, HELP_MESSAGE, parse_mode="Markdown")
 
 
 @bot.message_handler(commands=["stats"])
 def cmd_stats(message: Message) -> None:
-    """Muestra las estadísticas de aprendizaje del bot."""
     stats = memory.get_stats_summary()
     user_ctx = memory.get_user_context(message.chat.id)
-    bot.reply_to(message, f"{stats}\n{user_ctx}")
+    _safe_send(message.chat.id, f"{stats}\n{user_ctx}")
 
 
 @bot.message_handler(commands=["evolve"])
 def cmd_evolve(message: Message) -> None:
-    """Fuerza una reflexión evolutiva del bot."""
     bot.reply_to(message, "🧬 Analizando mi evolución... dame un momento.")
     try:
         result = run_async(memory.evolve())
-        bot.send_message(message.chat.id, f"🧬 *Evolución completada:*\n\n{result}")
+        _safe_send(message.chat.id, f"🧬 *Evolución completada:*\n\n{result}")
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Error durante la evolución: {e}")
 
 
 @bot.message_handler(commands=["clear"])
 def cmd_clear(message: Message) -> None:
-    """Limpia el historial de conversación del usuario."""
     chat_agent.clear_history(message.chat.id)
     bot.reply_to(message, "🧹 Historial de conversación limpiado. ¡Empezamos de cero!")
 
 
 @bot.message_handler(commands=["about"])
 def cmd_about(message: Message) -> None:
-    """Información sobre C8L Agency."""
     bot.reply_to(
         message,
         (
@@ -195,6 +208,7 @@ def cmd_about(message: Message) -> None:
             "🤖 Asistentes IA que evolucionan\n\n"
             "🌐 c8lagency.com"
         ),
+        parse_mode="Markdown",
     )
 
 
@@ -203,7 +217,6 @@ def cmd_about(message: Message) -> None:
 # ---------------------------------------------------------------------------
 @bot.callback_query_handler(func=lambda call: call.data.startswith("quick_"))
 def handle_quick_action(call: CallbackQuery) -> None:
-    """Maneja los botones de acción rápida."""
     action = call.data.replace("quick_", "")
     prompts = {
         "image": "¿Qué imagen quieres que cree? Describe lo que imaginas:",
@@ -220,28 +233,21 @@ def handle_quick_action(call: CallbackQuery) -> None:
 # ---------------------------------------------------------------------------
 @bot.message_handler(func=lambda m: True, content_types=["text"])
 def handle_message(message: Message) -> None:
-    """Procesa cualquier mensaje de texto a través del orquestador."""
     user_name = message.from_user.first_name or "Usuario"
     chat_id = message.chat.id
     text = message.text
 
     logger.info(f"📩 [{user_name}] ({chat_id}): {text[:80]}...")
 
-    # Indicador de "escribiendo..."
     bot.send_chat_action(chat_id, "typing")
-
-    # Rastrear interacción
     memory.track_user_interaction(chat_id, user_name, "MESSAGE")
 
     try:
-        # Procesar con el orquestador
         result = run_async(orchestrator.process(text, chat_id, user_name))
-
-        # Enviar la respuesta según el tipo
         _send_result(chat_id, result, message.message_id)
 
-        # Registrar episodio y aprender
-        intent = run_async(orchestrator.classify_intent(text))
+        # intent ya viene en el resultado — no llamar classify_intent otra vez
+        intent = result.get("intent", "CHAT")
         memory.record_episode(
             chat_id=chat_id,
             user_name=user_name,
@@ -251,7 +257,6 @@ def handle_message(message: Message) -> None:
             success=True,
         )
 
-        # Aprender de la tarea (async, en background)
         try:
             run_async(memory.learn_from_task(
                 user_message=text,
@@ -260,13 +265,11 @@ def handle_message(message: Message) -> None:
                 success=True,
             ))
         except Exception:
-            pass  # El aprendizaje no debe bloquear la respuesta
+            pass
 
     except Exception as e:
         logger.error(f"Error procesando mensaje: {e}", exc_info=True)
         bot.reply_to(message, f"❌ Error inesperado: {str(e)}\n\nInténtalo de nuevo.")
-
-        # Registrar el error para aprender
         memory.record_episode(
             chat_id=chat_id,
             user_name=user_name,
@@ -279,16 +282,11 @@ def handle_message(message: Message) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Handler de fotos — El usuario puede enviar fotos para editar/analizar
+# Handler de fotos
 # ---------------------------------------------------------------------------
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message: Message) -> None:
-    """Procesa fotos enviadas por el usuario."""
-    user_name = message.from_user.first_name or "Usuario"
-    caption = message.caption or "Analiza esta imagen"
-
     bot.send_chat_action(message.chat.id, "typing")
-
     bot.reply_to(
         message,
         (
@@ -304,60 +302,67 @@ def handle_photo(message: Message) -> None:
 # Enviar resultados al chat
 # ---------------------------------------------------------------------------
 def _send_result(chat_id: int, result: dict, reply_to: int = None) -> None:
-    """Envía el resultado del agente al chat de Telegram."""
     result_type = result.get("type", "text")
     content = result.get("content", "")
     caption = result.get("caption", "")
 
     try:
         if result_type == "text":
-            # Dividir mensajes largos (Telegram limita a 4096 chars)
             text = str(content)
             while text:
                 chunk = text[:4096]
-                bot.send_message(chat_id, chunk)
+                _safe_send(chat_id, chunk)
                 text = text[4096:]
 
         elif result_type == "image":
             bot.send_chat_action(chat_id, "upload_photo")
             photo = io.BytesIO(content)
             photo.name = "image.png"
-            bot.send_photo(chat_id, photo, caption=caption[:1024])
+            try:
+                bot.send_photo(chat_id, photo, caption=caption[:1024], parse_mode="Markdown")
+            except Exception:
+                photo.seek(0)
+                bot.send_photo(chat_id, photo, caption=caption[:1024])
 
         elif result_type == "video":
             bot.send_chat_action(chat_id, "upload_video")
             video = io.BytesIO(content)
             video.name = "video.mp4"
-            bot.send_video(chat_id, video, caption=caption[:1024], timeout=120)
+            try:
+                bot.send_video(chat_id, video, caption=caption[:1024], parse_mode="Markdown", timeout=120)
+            except Exception:
+                video.seek(0)
+                bot.send_video(chat_id, video, caption=caption[:1024], timeout=120)
 
         elif result_type == "video_parts":
-            # Vídeo largo dividido en partes
             parts = content
             bot.send_message(chat_id, f"📹 Enviando vídeo en {len(parts)} partes...")
             for i, part_bytes in enumerate(parts):
                 bot.send_chat_action(chat_id, "upload_video")
                 video = io.BytesIO(part_bytes)
                 video.name = f"video_parte_{i+1}.mp4"
-                bot.send_video(
-                    chat_id, video,
-                    caption=f"📹 Parte {i+1}/{len(parts)}",
-                    timeout=120,
-                )
+                bot.send_video(chat_id, video, caption=f"📹 Parte {i+1}/{len(parts)}", timeout=120)
 
         elif result_type == "file":
             bot.send_chat_action(chat_id, "upload_document")
             doc = io.BytesIO(content)
             doc.name = result.get("filename", "archivo.txt")
-            bot.send_document(chat_id, doc, caption=caption[:1024])
+            try:
+                bot.send_document(chat_id, doc, caption=caption[:1024], parse_mode="Markdown")
+            except Exception:
+                doc.seek(0)
+                bot.send_document(chat_id, doc, caption=caption[:1024])
 
-        # Enviar actualizaciones de progreso si las hay
         progress = result.get("progress", [])
         for update in progress:
             bot.send_message(chat_id, update)
 
     except Exception as e:
         logger.error(f"Error enviando resultado: {e}")
-        bot.send_message(chat_id, f"❌ Error enviando el resultado: {str(e)}")
+        try:
+            bot.send_message(chat_id, f"❌ Error enviando el resultado: {str(e)}")
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -394,48 +399,38 @@ def _run_health_server():
 # Notificación de admin al arrancar
 # ---------------------------------------------------------------------------
 def _notify_admin_startup() -> None:
-    """Envía un mensaje al admin cuando el bot arranca."""
     if not ADMIN_CHAT_ID:
-        logger.warning("ADMIN_CHAT_ID no configurado — no se enviará notificación de arranque")
+        logger.warning("ADMIN_CHAT_ID no configurado — sin notificación de arranque")
         return
-
     try:
         bot.send_message(
             int(ADMIN_CHAT_ID),
             (
                 "🦁✅ *@leovelabot está ACTIVO*\n\n"
-                "Todos los agentes están preparados y listos:\n\n"
-                "💬 Chat Agent — Conversación IA\n"
-                "🎨 Image Agent — Generación de imágenes\n"
-                "🎬 Video Agent — Vídeos cortos\n"
-                "📹 Video Pipeline — Vídeos largos (hasta 20 min)\n"
-                "💻 Code Agent — Programación y videojuegos\n"
-                "🎯 Design Agent — Diseños C8L\n"
-                "🧠 Memory System — Aprendizaje activo\n\n"
-                f"📊 Memoria: {len(memory.episodes)} episodios, "
-                f"{len(memory.skills)} habilidades\n\n"
-                "🚀 *Todo listo. Escríbeme lo que necesites.*"
+                "Todos los agentes listos:\n"
+                "💬 Chat | 🎨 Image | 🎬 Video | 📹 Pipeline | 💻 Code | 🎯 Design\n\n"
+                f"📊 Memoria: {len(memory.episodes)} episodios, {len(memory.skills)} skills\n"
+                "🚀 *Escríbeme lo que necesites.*"
             ),
+            parse_mode="Markdown",
         )
-        logger.info(f"📨 Notificación de arranque enviada a admin (chat_id={ADMIN_CHAT_ID})")
     except Exception as e:
-        logger.error(f"Error enviando notificación al admin: {e}")
+        logger.error(f"Error notificando admin: {e}")
 
 
 # ---------------------------------------------------------------------------
 # Evolución periódica automática
 # ---------------------------------------------------------------------------
 def _auto_evolve_loop():
-    """Ejecuta evolución automática cada 100 episodios."""
     import time
     last_count = len(memory.episodes)
     while True:
-        time.sleep(300)  # Revisar cada 5 minutos
+        time.sleep(300)
         current_count = len(memory.episodes)
         if current_count - last_count >= 100:
-            logger.info("🧬 Evolución automática activada (100 nuevos episodios)")
+            logger.info("🧬 Evolución automática activada")
             try:
-                asyncio.run(memory.evolve())
+                run_async(memory.evolve())
             except Exception as e:
                 logger.error(f"Error en evolución automática: {e}")
             last_count = current_count
@@ -445,9 +440,10 @@ def _auto_evolve_loop():
 # Graceful shutdown
 # ---------------------------------------------------------------------------
 def _handle_signal(signum, _frame):
-    logger.info(f"Señal {signum} recibida — guardando memoria y apagando...")
+    logger.info(f"Señal {signum} recibida — guardando memoria...")
     memory.save_all()
-    bot.stop_polling()
+    if bot:
+        bot.stop_polling()
     sys.exit(0)
 
 
@@ -458,16 +454,11 @@ def main():
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    # Health-check server (daemon)
     threading.Thread(target=_run_health_server, daemon=True).start()
-
-    # Evolución automática (daemon)
     threading.Thread(target=_auto_evolve_loop, daemon=True).start()
 
-    # Notificar al admin
     _notify_admin_startup()
 
-    # Arrancar el bot
     logger.info(f"🚀 @{BOT_NAME} arrancado — Modo polling — Abierto para todos")
     logger.info(f"🧠 Agentes: chat, image, video, video_pipeline, code, design")
     logger.info(f"📚 Memoria: {len(memory.episodes)} episodios, {len(memory.skills)} habilidades")
