@@ -47,15 +47,21 @@ logging.basicConfig(
 logger = logging.getLogger("leovelabot")
 
 # ---------------------------------------------------------------------------
-# Validar configuración
+# Validar configuración (solo si es ejecución directa, no importación)
 # ---------------------------------------------------------------------------
-if not validate_config():
-    sys.exit(1)
+_is_main = __name__ == "__main__"
+
+if _is_main:
+    if not validate_config():
+        sys.exit(1)
+elif not TELEGRAM_BOT_TOKEN:
+    # Importado pero sin token — loguear aviso pero no crashear
+    logger.warning("⚠️ bot.py importado sin TELEGRAM_BOT_TOKEN — funcionalidad Telegram limitada")
 
 # ---------------------------------------------------------------------------
 # Instancias globales
 # ---------------------------------------------------------------------------
-bot = TeleBot(TELEGRAM_BOT_TOKEN, parse_mode="Markdown")
+bot = TeleBot(TELEGRAM_BOT_TOKEN, parse_mode="Markdown") if TELEGRAM_BOT_TOKEN else None
 memory = BotMemory()
 orchestrator = AgentOrchestrator()
 

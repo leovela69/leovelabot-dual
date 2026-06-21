@@ -36,9 +36,9 @@ MAX_VIDEO_DURATION_MINUTES: int = 20
 SCENE_DURATION_SECONDS: int = 5  # Duración de cada escena/clip
 
 # ---------------------------------------------------------------------------
-# Server
+# Server — Puerto unificado (Render inyecta PORT, usamos 8080 por defecto)
 # ---------------------------------------------------------------------------
-HEALTH_PORT: int = int(os.environ.get("HEALTH_PORT", "8080"))
+HEALTH_PORT: int = int(os.environ.get("PORT", os.environ.get("HEALTH_PORT", "8080")))
 
 # ---------------------------------------------------------------------------
 # Límites del tier gratuito

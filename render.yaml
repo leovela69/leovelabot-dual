@@ -19,6 +19,8 @@ services:
         value: "c8l_leovela_2026"
       - key: ADMIN_PHONE
         value: "34611636294"
+      - key: PORT
+        value: "8080"
       - key: TEMP_DIR
         value: "/tmp/leovelabot_videos"
     disk:

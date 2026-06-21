@@ -23,8 +23,11 @@ VERIFY_TOKEN: str = os.environ.get("WA_VERIFY_TOKEN", "c8l_leovela_2026")
 # Numero del admin (tu numero con codigo de pais, sin + ni espacios)
 ADMIN_PHONE: str = os.environ.get("ADMIN_PHONE", "34611636294")
 
-# Puerto del servidor webhook
-WEBHOOK_PORT: int = int(os.environ.get("PORT", os.environ.get("WA_WEBHOOK_PORT", "5000")))
+# ---------------------------------------------------------------------------
+# Puerto del servidor web (unificado con el health-check de Telegram)
+# Render.com inyecta PORT automáticamente. Usamos el mismo puerto para todo.
+# ---------------------------------------------------------------------------
+WEBHOOK_PORT: int = int(os.environ.get("PORT", "8080"))
 
 # ---------------------------------------------------------------------------
 # Gemini API (compartida con el bot de Telegram)
@@ -36,20 +39,18 @@ WEBHOOK_PORT: int = int(os.environ.get("PORT", os.environ.get("WA_WEBHOOK_PORT",
 # Validacion
 # ---------------------------------------------------------------------------
 def validate_wa_config() -> bool:
-    """Valida que las variables criticas esten configuradas."""
-    errors = []
+    """Valida que las variables criticas esten configuradas. Retorna False si faltan (no crashea)."""
+    missing = []
 
     if not WHATSAPP_TOKEN:
-        errors.append("WHATSAPP_TOKEN no esta configurado")
+        missing.append("WHATSAPP_TOKEN")
 
     if not WHATSAPP_PHONE_ID:
-        errors.append("WHATSAPP_PHONE_ID no esta configurado")
+        missing.append("WHATSAPP_PHONE_ID")
 
-    if errors:
-        for err in errors:
-            logger.error(f"ERROR: {err}")
-        logger.error("Configura las variables de entorno de WhatsApp antes de arrancar.")
+    if missing:
+        logger.warning(f"⚠️ WhatsApp desactivado — faltan: {', '.join(missing)}")
         return False
 
-    logger.info("Configuracion de WhatsApp validada correctamente")
+    logger.info("✅ Configuracion de WhatsApp validada correctamente")
     return True
