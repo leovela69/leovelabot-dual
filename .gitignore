@@ -3,3 +3,6 @@ __pycache__/
 .env
 logs/
 *.log
+.venv/
+memory.json
+scratch/

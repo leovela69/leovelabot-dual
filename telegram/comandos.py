@@ -27,6 +27,8 @@ async def procesar_comando(chat_id: str, texto: str, user_name: str):
         await cmd_nuevo(chat_id)
     elif comando == "/entrenamiento":
         await cmd_entrenamiento(chat_id)
+    elif comando == "/diagnostico":
+        await cmd_diagnostico(chat_id)
     else:
         await enviar_mensaje(chat_id, f"Comando `{comando}` no reconocido. Usa /help.")
 
@@ -67,7 +69,8 @@ async def cmd_help(chat_id: str):
         "• /custodio contenido — Pendientes\n"
         "• /custodio metricas — Métricas web\n"
         "• /custodio reparar — Diagnosticar\n"
-        "• /custodio diagnosticar — Check profundo\n\n"
+        "• /custodio diagnosticar — Check profundo\n"
+        "• /diagnostico — Diagnóstico sin tokens (admin)\n\n"
         "*O simplemente escribe lo que necesitas:*\n"
         "_'Hazme una landing de zapatos'_\n"
         "_'Crea una API REST con auth'_\n"
@@ -144,3 +147,15 @@ async def cmd_entrenamiento(chat_id: str):
     from bots.fantasma import bot_fantasma
     reporte = bot_fantasma.generar_reporte_entrenamiento()
     await enviar_mensaje(chat_id, reporte)
+
+
+async def cmd_diagnostico(chat_id: str):
+    import config
+    if not config.ADMIN_TELEGRAM_ID or str(chat_id) != str(config.ADMIN_TELEGRAM_ID):
+        await enviar_mensaje(chat_id, "⛔ Comando solo para administradores.")
+        return
+
+    from scripts.diagnostico_sin_tokens import diagnosticar_sistema
+    resultado = diagnosticar_sistema()
+    # Puesto que es markdown, envolvemos en un bloque de código para que se lea alineado
+    await enviar_mensaje(chat_id, f"📋 *Resultado del diagnóstico:*\n```text\n{resultado}\n```")

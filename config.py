@@ -16,6 +16,7 @@ GEMINI_KEYS = [
     os.getenv(f"GEMINI_API_KEY_{i}", "") for i in range(1, 6)
 ]
 GEMINI_KEYS = [k for k in GEMINI_KEYS if k]  # Filtrar vacias
+GEMINI_API_KEY = GEMINI_KEYS[0] if GEMINI_KEYS else os.getenv("GEMINI_API_KEY", "")
 
 # === GROQ (rotacion de keys) ===
 GROQ_KEYS = [
@@ -72,3 +73,15 @@ MODELO_COORDINACION = "gemini-flash"
 MODELO_COMPLEJO = "gemini-pro"
 MODELO_EJECUCION = "groq"
 MODELO_FALLBACK = "openrouter"
+
+# === AGENT CONFIGURATION ===
+TEMP_DIR = os.getenv("TEMP_DIR", "temp")
+GEMINI_CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-1.5-flash")
+GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "imagen-3.0-generate-002")
+GEMINI_CODE_MODEL = os.getenv("GEMINI_CODE_MODEL", "gemini-1.5-pro")
+SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "Eres Leo, el asistente oficial de C8L Agency.")
+MAX_HISTORY_PER_USER = int(os.getenv("MAX_HISTORY_PER_USER", "10"))
+FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
+SCENE_DURATION_SECONDS = int(os.getenv("SCENE_DURATION_SECONDS", "5"))
+MAX_VIDEO_DURATION_MINUTES = int(os.getenv("MAX_VIDEO_DURATION_MINUTES", "20"))
+MAX_SCENES_PER_VIDEO = int(os.getenv("MAX_SCENES_PER_VIDEO", "240"))
