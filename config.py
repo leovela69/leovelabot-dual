@@ -22,9 +22,9 @@ BOT_NAME: str = "leovelabot"
 # ---------------------------------------------------------------------------
 GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
 
-# Modelos gratuitos
-GEMINI_CHAT_MODEL: str = "gemini-2.5-flash"          # Chat y routing — tier gratuito
-GEMINI_IMAGE_MODEL: str = "gemini-2.5-flash"          # Generación de imágenes — tier gratuito
+# Modelos gratuitos (junio 2026)
+GEMINI_CHAT_MODEL: str = "gemini-2.5-flash"          # Chat, routing y code — tier gratuito
+GEMINI_IMAGE_MODEL: str = "gemini-2.5-flash-preview-image-generation"  # Generación de imágenes — 500/día gratis
 GEMINI_CODE_MODEL: str = "gemini-2.5-flash"           # Code execution — tier gratuito
 
 # ---------------------------------------------------------------------------
