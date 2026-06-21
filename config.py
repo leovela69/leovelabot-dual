@@ -15,7 +15,7 @@ logger = logging.getLogger("leovelabot.config")
 # ---------------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ADMIN_CHAT_ID: str = os.environ.get("ADMIN_CHAT_ID", "")  # Tu chat ID para notificaciones
-BOT_NAME: str = "leovelabot"
+BOT_NAME: str = "leon_leo_bot"
 
 # ---------------------------------------------------------------------------
 # Gemini API (Google AI — Tier Gratuito)
