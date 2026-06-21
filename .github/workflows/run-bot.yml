@@ -1,0 +1,40 @@
+name: "Run @leovelabot (Telegram + Gemini)"
+
+on:
+  # Se puede ejecutar manualmente desde GitHub
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: "Minutos que el bot estará activo (max 360)"
+        required: false
+        default: "350"
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 horas max (gratis en GitHub Actions)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Run bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
+        run: |
+          echo "🦁 Arrancando @leovelabot..."
+          echo "⏱️ El bot estará activo por ${{ github.event.inputs.duration_minutes || '350' }} minutos"
+          timeout $((  ${{ github.event.inputs.duration_minutes || '350' }} * 60 )) python bot.py || true
+          echo "⏹️ Bot detenido."
