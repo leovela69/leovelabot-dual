@@ -12,6 +12,8 @@ from google.genai import types
 
 from config import GEMINI_API_KEY, GEMINI_IMAGE_MODEL
 
+from agents.model_manager import smart_generate
+
 logger = logging.getLogger("leovelabot.image")
 
 _client = None
@@ -38,8 +40,7 @@ class ImageAgent:
                 f"Style: vibrant colors, professional quality, cinematic lighting."
             )
 
-            response = _get_client().models.generate_content(
-                model=GEMINI_IMAGE_MODEL,
+            response = await smart_generate(_get_client(), GEMINI_IMAGE_MODEL,
                 contents=enhanced_prompt,
                 config=types.GenerateContentConfig(
                     response_modalities=["TEXT", "IMAGE"],

@@ -10,6 +10,8 @@ from google.genai import types
 
 from config import GEMINI_API_KEY, GEMINI_CODE_MODEL, SYSTEM_PROMPT
 
+from agents.model_manager import smart_generate
+
 logger = logging.getLogger("leovelabot.code")
 
 _client = None
@@ -49,8 +51,7 @@ class CodeAgent:
 
     async def _create_game(self, message: str, user_name: str) -> dict:
         """Genera un videojuego completo en HTML5 jugable en el navegador."""
-        response = _get_client().models.generate_content(
-            model=GEMINI_CODE_MODEL,
+        response = await smart_generate(_get_client(), GEMINI_CODE_MODEL,
             contents=(
                 f"Eres un desarrollador de videojuegos experto. Crea un juego web completo "
                 f"basado en esta petición: '{message}'.\n\n"
@@ -98,8 +99,7 @@ class CodeAgent:
         """Genera código con ejecución opcional."""
         # Intentar con code execution si es algo que se puede ejecutar
         try:
-            response = _get_client().models.generate_content(
-                model=GEMINI_CODE_MODEL,
+            response = await smart_generate(_get_client(), GEMINI_CODE_MODEL,
                 contents=(
                     f"El usuario {user_name} pide: {message}\n\n"
                     f"Si la petición requiere generar código, genera código limpio, "
@@ -114,8 +114,7 @@ class CodeAgent:
             )
         except Exception:
             # Fallback sin code execution si no está disponible
-            response = _get_client().models.generate_content(
-                model=GEMINI_CODE_MODEL,
+            response = await smart_generate(_get_client(), GEMINI_CODE_MODEL,
                 contents=(
                     f"El usuario {user_name} pide: {message}\n\n"
                     f"Genera código limpio, documentado y funcional. "

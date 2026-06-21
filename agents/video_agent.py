@@ -24,6 +24,8 @@ from config import (
     SCENE_DURATION_SECONDS,
 )
 
+from agents.model_manager import smart_generate
+
 logger = logging.getLogger("leovelabot.video")
 
 _client = None
@@ -50,8 +52,7 @@ class VideoAgent:
                 f"{description}. Style: cinematic, vivid colors, professional film quality, 4K look."
             )
 
-            response = _get_client().models.generate_content(
-                model=GEMINI_IMAGE_MODEL,
+            response = await smart_generate(_get_client(), GEMINI_IMAGE_MODEL,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_modalities=["TEXT", "IMAGE"],
@@ -75,8 +76,7 @@ class VideoAgent:
     async def _generate_scene_descriptions(self, prompt: str, num_scenes: int) -> list[str]:
         """Usa Gemini para generar descripciones visuales de cada escena."""
         try:
-            response = _get_client().models.generate_content(
-                model=GEMINI_CHAT_MODEL,
+            response = await smart_generate(_get_client(), GEMINI_CHAT_MODEL,
                 contents=(
                     f"Genera exactamente {num_scenes} descripciones de escenas visuales para un vídeo corto sobre: "
                     f"'{prompt}'. Cada descripción debe ser una línea que describa la imagen visual de esa escena. "

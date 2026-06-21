@@ -16,6 +16,8 @@ from google.genai import types
 
 from config import GEMINI_API_KEY, GEMINI_CHAT_MODEL, TEMP_DIR
 
+from agents.model_manager import smart_generate
+
 logger = logging.getLogger("leovelabot.memory")
 
 _client = None
@@ -146,8 +148,7 @@ class BotMemory:
             lesson_type = "skill"
 
         try:
-            response = _get_client().models.generate_content(
-                model=GEMINI_CHAT_MODEL,
+            response = await smart_generate(_get_client(), GEMINI_CHAT_MODEL,
                 contents=(
                     f"Eres un sistema de aprendizaje autónomo. Analiza esta tarea completada y extrae "
                     f"UNA lección concisa (máximo 2 frases) que puedas usar para mejorar en el futuro.\n\n"
@@ -288,8 +289,7 @@ class BotMemory:
                 if not ep.get("success")
             ]
 
-            response = _get_client().models.generate_content(
-                model=GEMINI_CHAT_MODEL,
+            response = await smart_generate(_get_client(), GEMINI_CHAT_MODEL,
                 contents=(
                     f"Eres un sistema de auto-mejora para un bot IA. Analiza estas estadísticas "
                     f"y sugiere 3 mejoras concretas y accionables.\n\n"

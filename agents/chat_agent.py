@@ -16,6 +16,8 @@ from config import (
     MAX_HISTORY_PER_USER,
 )
 
+from agents.model_manager import smart_generate
+
 logger = logging.getLogger("leovelabot.chat")
 
 _client = None
@@ -72,8 +74,7 @@ Usuario: {message}
 
 Leo:"""
 
-            response = _get_client().models.generate_content(
-                model=GEMINI_CHAT_MODEL,
+            response = await smart_generate(_get_client(), GEMINI_CHAT_MODEL,
                 contents=full_prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.8,

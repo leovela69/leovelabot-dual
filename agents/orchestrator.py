@@ -11,6 +11,8 @@ from google.genai import types
 
 from config import GEMINI_API_KEY, GEMINI_CHAT_MODEL
 
+from agents.model_manager import smart_generate
+
 logger = logging.getLogger("leovelabot.orchestrator")
 
 # Cliente Gemini (lazy init)
@@ -53,8 +55,7 @@ class AgentOrchestrator:
     async def classify_intent(self, message: str) -> str:
         """Clasifica la intención del mensaje usando Gemini."""
         try:
-            response = _get_client().models.generate_content(
-                model=GEMINI_CHAT_MODEL,
+            response = await smart_generate(_get_client(), GEMINI_CHAT_MODEL,
                 contents=CLASSIFICATION_PROMPT.format(message=message),
                 config=types.GenerateContentConfig(
                     temperature=0.1,

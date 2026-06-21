@@ -11,6 +11,8 @@ from google.genai import types
 
 from config import GEMINI_API_KEY, GEMINI_IMAGE_MODEL
 
+from agents.model_manager import smart_generate
+
 logger = logging.getLogger("leovelabot.design")
 
 _client = None
@@ -50,8 +52,7 @@ class DesignAgent:
                 f"High resolution, clean composition, visually striking."
             )
 
-            response = _get_client().models.generate_content(
-                model=GEMINI_IMAGE_MODEL,
+            response = await smart_generate(_get_client(), GEMINI_IMAGE_MODEL,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_modalities=["TEXT", "IMAGE"],

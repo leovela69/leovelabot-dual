@@ -24,6 +24,8 @@ from config import (
     MAX_SCENES_PER_VIDEO,
 )
 
+from agents.model_manager import smart_generate
+
 logger = logging.getLogger("leovelabot.video_pipeline")
 
 _client = None
@@ -49,8 +51,7 @@ class VideoPipeline:
             MAX_SCENES_PER_VIDEO,
         )
 
-        response = _get_client().models.generate_content(
-            model=GEMINI_CHAT_MODEL,
+        response = await smart_generate(_get_client(), GEMINI_CHAT_MODEL,
             contents=(
                 f"Eres un guionista profesional de cine. Crea un guión detallado para un vídeo "
                 f"de {duration_minutes} minutos sobre: '{prompt}'.\n\n"
@@ -114,8 +115,7 @@ class VideoPipeline:
             }
             style = style_map.get(mood, "cinematic, professional, high quality")
 
-            response = _get_client().models.generate_content(
-                model=GEMINI_IMAGE_MODEL,
+            response = await smart_generate(_get_client(), GEMINI_IMAGE_MODEL,
                 contents=(
                     f"Generate a cinematic widescreen (16:9) image: {visual_description}. "
                     f"Style: {style}, 4K film quality, no text or watermarks."
