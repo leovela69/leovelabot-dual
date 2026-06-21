@@ -54,9 +54,9 @@ logger = logging.getLogger("leovelabot.whatsapp")
 # ---------------------------------------------------------------------------
 # Validar configuracion
 # ---------------------------------------------------------------------------
-if not validate_wa_config():
-    logger.error("Configuracion de WhatsApp incompleta. Revisa las variables de entorno.")
-    sys.exit(1)
+WA_ENABLED = validate_wa_config()
+if not WA_ENABLED:
+    logger.warning("WhatsApp NO configurado — solo se usará Telegram.")
 
 # ---------------------------------------------------------------------------
 # Flask app
@@ -366,28 +366,58 @@ def health():
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    logger.info("Leo Vela WhatsApp Bot arrancando...")
-    logger.info(f"Agentes: chat, image, video, video_pipeline, code, design")
-    logger.info(f"Memoria: {len(memory.episodes)} episodios, {len(memory.skills)} habilidades")
-    logger.info(f"Webhook escuchando en puerto {WEBHOOK_PORT}")
+    logger.info("=" * 60)
+    logger.info("🦁 Leo Vela Bot Dual — Arrancando...")
+    logger.info("=" * 60)
 
-    # Arrancar el bot de Telegram en segundo plano si el token está configurado
     telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    telegram_started = False
+
+    # Intentar arrancar Telegram
     if telegram_token:
-        logger.info("Iniciando Bot de Telegram en segundo plano...")
+        logger.info("🤖 Iniciando Bot de Telegram...")
         try:
             import bot as tg_bot
             # Compartir las mismas instancias de memoria y orquestador
             tg_bot.memory = memory
             tg_bot.orchestrator = orchestrator
-            # Lanzar el polling en un hilo
-            threading.Thread(
-                target=tg_bot.bot.infinity_polling,
-                kwargs={"timeout": 30, "long_polling_timeout": 25},
-                daemon=True
-            ).start()
-            logger.info("Bot de Telegram iniciado con éxito en segundo plano.")
-        except Exception as tg_err:
-            logger.error(f"Error al iniciar el Bot de Telegram en segundo plano: {tg_err}", exc_info=True)
 
-    app.run(host="0.0.0.0", port=WEBHOOK_PORT, debug=False)
+            if WA_ENABLED:
+                # WhatsApp disponible: Telegram en hilo secundario
+                threading.Thread(
+                    target=tg_bot.bot.infinity_polling,
+                    kwargs={"timeout": 30, "long_polling_timeout": 25},
+                    daemon=True
+                ).start()
+                logger.info("✅ Bot de Telegram iniciado (hilo secundario)")
+                telegram_started = True
+            else:
+                # Solo Telegram: arranca Flask para health check + Telegram como principal
+                logger.info("✅ Telegram es el bot principal (sin WhatsApp)")
+                telegram_started = True
+
+                # Health check en hilo secundario
+                threading.Thread(
+                    target=lambda: app.run(host="0.0.0.0", port=WEBHOOK_PORT, debug=False),
+                    daemon=True
+                ).start()
+                logger.info(f"🏥 Health check en puerto {WEBHOOK_PORT}")
+
+                # Telegram como proceso principal
+                logger.info(f"🚀 @leovelabot en modo polling — Listo!")
+                tg_bot.bot.infinity_polling(timeout=30, long_polling_timeout=25)
+
+        except Exception as tg_err:
+            logger.error(f"❌ Error al iniciar Bot de Telegram: {tg_err}", exc_info=True)
+    else:
+        logger.warning("⚠️ TELEGRAM_BOT_TOKEN no configurado")
+
+    # Si WhatsApp está habilitado, arrancar Flask como proceso principal
+    if WA_ENABLED:
+        logger.info(f"📱 WhatsApp webhook escuchando en puerto {WEBHOOK_PORT}")
+        logger.info(f"🧠 Agentes: chat, image, video, video_pipeline, code, design")
+        logger.info(f"📚 Memoria: {len(memory.episodes)} episodios, {len(memory.skills)} habilidades")
+        app.run(host="0.0.0.0", port=WEBHOOK_PORT, debug=False)
+    elif not telegram_started:
+        logger.error("❌ Ni Telegram ni WhatsApp configurados. No se puede arrancar.")
+        sys.exit(1)

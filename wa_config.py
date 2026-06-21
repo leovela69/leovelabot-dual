@@ -47,8 +47,7 @@ def validate_wa_config() -> bool:
 
     if errors:
         for err in errors:
-            logger.error(f"ERROR: {err}")
-        logger.error("Configura las variables de entorno de WhatsApp antes de arrancar.")
+            logger.warning(f"⚠️ {err}")
         return False
 
     logger.info("Configuracion de WhatsApp validada correctamente")
