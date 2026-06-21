@@ -1,82 +1,74 @@
-# -*- coding: utf-8 -*-
-"""
-Configuración centralizada para @leovelabot.
-Todas las API keys y constantes del sistema multi-agente.
-"""
+"""Configuracion central del sistema C8L AGENT v15.4"""
 
 import os
-import sys
-import logging
+from dotenv import load_dotenv
 
-logger = logging.getLogger("leovelabot.config")
+load_dotenv()
 
-# ---------------------------------------------------------------------------
-# Telegram
-# ---------------------------------------------------------------------------
-TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-ADMIN_CHAT_ID: str = os.environ.get("ADMIN_CHAT_ID", "")  # Tu chat ID para notificaciones
-BOT_NAME: str = "leovelabot"
 
-# ---------------------------------------------------------------------------
-# Gemini API (Google AI — Tier Gratuito)
-# ---------------------------------------------------------------------------
-GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
+# === TELEGRAM ===
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_WEBHOOK_URL = os.getenv("TELEGRAM_WEBHOOK_URL", "")
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "")
 
-# Modelos gratuitos
-GEMINI_CHAT_MODEL: str = "gemini-2.5-flash"          # Chat y routing — tier gratuito
-GEMINI_IMAGE_MODEL: str = "gemini-2.5-flash"          # Generación de imágenes — tier gratuito
-GEMINI_CODE_MODEL: str = "gemini-2.5-flash"           # Code execution — tier gratuito
+# === GEMINI (rotacion de keys) ===
+GEMINI_KEYS = [
+    os.getenv(f"GEMINI_API_KEY_{i}", "") for i in range(1, 6)
+]
+GEMINI_KEYS = [k for k in GEMINI_KEYS if k]  # Filtrar vacias
 
-# ---------------------------------------------------------------------------
-# Video Pipeline
-# ---------------------------------------------------------------------------
-FFMPEG_PATH: str = os.environ.get("FFMPEG_PATH", "ffmpeg")
-TEMP_DIR: str = os.environ.get("TEMP_DIR", "/tmp/leovelabot_videos")
-MAX_VIDEO_DURATION_MINUTES: int = 20
-SCENE_DURATION_SECONDS: int = 5  # Duración de cada escena/clip
+# === GROQ (rotacion de keys) ===
+GROQ_KEYS = [
+    os.getenv(f"GROQ_API_KEY_{i}", "") for i in range(1, 4)
+]
+GROQ_KEYS = [k for k in GROQ_KEYS if k]
 
-# ---------------------------------------------------------------------------
-# Server
-# ---------------------------------------------------------------------------
-HEALTH_PORT: int = int(os.environ.get("HEALTH_PORT", "8080"))
+# === SUPABASE ===
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 
-# ---------------------------------------------------------------------------
-# Límites del tier gratuito
-# ---------------------------------------------------------------------------
-MAX_HISTORY_PER_USER: int = 30    # Mensajes de contexto por usuario
-MAX_SCENES_PER_VIDEO: int = 240   # 20 min / 5s = 240 escenas máximo
+# === REDIS ===
+UPSTASH_REDIS_URL = os.getenv("UPSTASH_REDIS_URL", "")
+UPSTASH_REDIS_TOKEN = os.getenv("UPSTASH_REDIS_TOKEN", "")
 
-# ---------------------------------------------------------------------------
-# Personalidad del Bot
-# ---------------------------------------------------------------------------
-SYSTEM_PROMPT: str = """Eres Leo, el asistente IA de C8L Agency — una plataforma de producción musical y gaming.
-Tu personalidad es: creativo, directo, entusiasta, y con estética cyberpunk/gamer.
-Respondes siempre en español salvo que el usuario te hable en otro idioma.
-Usas emojis con moderación para dar vida a tus respuestas.
-Eres experto en: música, producción, diseño, programación, videojuegos, y creación de contenido.
-Cuando el usuario pida algo creativo (imagen, vídeo, código, diseño), confirma brevemente qué vas a crear y hazlo."""
+# === BUSQUEDA WEB ===
+SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
+BRAVE_SEARCH_KEY = os.getenv("BRAVE_SEARCH_KEY", "")
 
-# ---------------------------------------------------------------------------
-# Validación al arrancar
-# ---------------------------------------------------------------------------
-def validate_config() -> bool:
-    """Valida que las variables críticas estén configuradas."""
-    errors = []
+# === HUGGING FACE ===
+HF_API_TOKEN = os.getenv("HF_API_TOKEN", "")
 
-    if not TELEGRAM_BOT_TOKEN:
-        errors.append("TELEGRAM_BOT_TOKEN no está configurado")
+# === EMBEDDINGS ===
+JINA_API_KEY = os.getenv("JINA_API_KEY", "")
 
-    if not GEMINI_API_KEY:
-        errors.append("GEMINI_API_KEY no está configurado")
+# === DEPLOY ===
+VERCEL_TOKEN = os.getenv("VERCEL_TOKEN", "")
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+WEB_REPO = os.getenv("WEB_REPO", "leovela69/c8lagency-web")
 
-    if not ADMIN_CHAT_ID:
-        logger.warning("ADMIN_CHAT_ID no está configurado — no se enviarán notificaciones de admin")
+# === OPENROUTER ===
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
-    if errors:
-        for err in errors:
-            logger.error(f"❌ {err}")
-        logger.error("Configura las variables de entorno antes de arrancar el bot.")
-        return False
+# === WEB C8L ===
+WEB_URL = os.getenv("WEB_URL", "https://c8lagency.com")
+WEB_SITEMAP = os.getenv("WEB_SITEMAP", "https://c8lagency.com/sitemap.xml")
 
-    logger.info("✅ Configuración validada correctamente")
-    return True
+# === CONFIG GENERAL ===
+TIMEZONE = os.getenv("TIMEZONE", "America/Mexico_City")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+DAILY_REPORT_HOUR = int(os.getenv("DAILY_REPORT_HOUR", "8"))
+AUDIT_INTERVAL_HOURS = int(os.getenv("AUDIT_INTERVAL_HOURS", "6"))
+PING_INTERVAL_MINUTES = int(os.getenv("PING_INTERVAL_MINUTES", "5"))
+
+# === RATE LIMITS ===
+MAX_REQUESTS_PER_HOUR = 60
+MAX_MESSAGE_LENGTH = 5000
+
+# === MODELOS POR DEFECTO ===
+MODELO_COORDINACION = "gemini-flash"
+MODELO_COMPLEJO = "gemini-pro"
+MODELO_EJECUCION = "groq"
+MODELO_FALLBACK = "openrouter"

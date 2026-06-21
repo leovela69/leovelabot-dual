@@ -1,0 +1,14 @@
+PROMPT POSITIVO SUNO/UDIO (Bolero-House estándar C8L):
+Bolero-House style, 115 BPM, smooth and deep House kick, warm ukulele, upright-style bass, maracas, atmospheric synthesizer, elegant dance rhythm, playful ukulele strumming, bongo percussion, lofi filter, echoing voice, velvety smiling vocals, rich harmonies, groovy outro.
+
+PROMPT NEGATIVO:
+aggressive, harsh vocals, high BPM (>130), techno, acoustic solo, distorted guitar, fast metal, rap, low quality, muffled, tinny, thin, muddy, distorted, clipping, overcompressed, auto-tune excessive, robotic vocals, off-key, out of time, genre mismatch.
+
+VARIANTE ROMÁNTICA:
+Bolero-House romantic, 112 BPM, gentle House kick, tender ukulele fingerpicking, warm bass, soft maracas, dreamy synthesizer pads, intimate vocals, whispered harmonies, slow groove intro, emotional crescendo, fade out with reverb.
+
+VARIANTE FIESTA:
+Bolero-House party, 118 BPM, punchy House kick, energetic ukulele strumming, slap bass, loud maracas, bright synth leads, call-and-response vocals, crowd energy, build-up drops, celebratory brass, extended dance outro.
+
+VARIANTE MELANCÓLICA:
+Bolero-House melancholic, 110 BPM, subdued House kick, minor key ukulele, deep bass, rain-like percussion, ethereal pads, lonely vocal, echo-drenched harmonies, introspective bridge, slow fade.
